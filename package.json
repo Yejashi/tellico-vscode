@@ -1,0 +1,229 @@
+{
+  "name": "tellico-vscode",
+  "displayName": "Tellico",
+  "description": "Chat with the Tellico Qwen agents (opencode-tellico) inside VS Code.",
+  "version": "0.1.0",
+  "publisher": "yejashi",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Yejashi/tellico-vscode"
+  },
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "tellico",
+          "title": "Tellico",
+          "icon": "media/tellico.svg"
+        }
+      ]
+    },
+    "views": {
+      "tellico": [
+        {
+          "type": "webview",
+          "id": "tellico.chat",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "tellico.newSession",
+        "title": "New Session",
+        "category": "Tellico",
+        "icon": "$(add)"
+      },
+      {
+        "command": "tellico.openInTab",
+        "title": "Open Chat in New Tab",
+        "category": "Tellico",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "tellico.history",
+        "title": "Session History",
+        "category": "Tellico",
+        "icon": "$(history)"
+      },
+      {
+        "command": "tellico.focus",
+        "title": "Focus Chat",
+        "category": "Tellico"
+      },
+      {
+        "command": "tellico.addSelection",
+        "title": "Add Selection to Chat",
+        "category": "Tellico"
+      },
+      {
+        "command": "tellico.restartServer",
+        "title": "Restart Server",
+        "category": "Tellico"
+      },
+      {
+        "command": "tellico.showLogs",
+        "title": "Show Server Logs",
+        "category": "Tellico"
+      },
+      {
+        "command": "tellico.openChanges",
+        "title": "Open Changed File Diff",
+        "category": "Tellico"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "tellico.newSession",
+          "when": "view == tellico.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "tellico.history",
+          "when": "view == tellico.chat",
+          "group": "navigation@2"
+        },
+        {
+          "command": "tellico.openInTab",
+          "when": "view == tellico.chat",
+          "group": "navigation@3"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "tellico.addSelection",
+          "when": "editorHasSelection",
+          "group": "tellico@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "tellico.openChanges",
+          "when": "false"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "tellico.focus",
+        "key": "ctrl+escape",
+        "mac": "cmd+escape"
+      },
+      {
+        "command": "tellico.openInTab",
+        "key": "ctrl+shift+escape",
+        "mac": "cmd+shift+escape"
+      },
+      {
+        "command": "tellico.addSelection",
+        "key": "alt+k",
+        "when": "editorTextFocus"
+      }
+    ],
+    "configuration": {
+      "title": "Tellico",
+      "properties": {
+        "tellico.launcherPath": {
+          "type": "string",
+          "default": "opencode-tellico",
+          "description": "The opencode-tellico launcher from tellico-agentic-setup. A bare name is looked up on PATH and in ~/.local/bin."
+        },
+        "tellico.leadNode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "0",
+            "1"
+          ],
+          "default": "auto",
+          "description": "Which Tellico server new sessions lead on. auto derives a stable node from this device, as opencode-tellico does."
+        },
+        "tellico.defaultMode": {
+          "type": "string",
+          "enum": [
+            "build",
+            "orchestrate"
+          ],
+          "default": "build",
+          "enumDescriptions": [
+            "build-tellico: one engineer does the whole job on one server.",
+            "orchestrate-tellico: the same engineer, which may also delegate to the two node-pinned workers."
+          ],
+          "description": "Agent new sessions open on."
+        },
+        "tellico.defaultThink": {
+          "type": "string",
+          "enum": [
+            "off",
+            "low",
+            "medium",
+            "xhigh"
+          ],
+          "default": "medium",
+          "description": "Thinking level new sessions start with."
+        },
+        "tellico.magicContext": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use Magic Context instead of OpenCode's compaction (opencode-tellico --no-magic-context when off)."
+        },
+        "tellico.backgroundSubagents": {
+          "type": "boolean",
+          "default": true,
+          "description": "Dispatch workers in the background (TELLICO_BACKGROUND_SUBAGENTS). Turn off if worker reports go missing."
+        },
+        "tellico.attachActiveEditor": {
+          "type": "boolean",
+          "default": true,
+          "description": "Attach the active file (and selection, if any) to each prompt."
+        },
+        "tellico.showReasoning": {
+          "type": "boolean",
+          "default": false,
+          "description": "Expand the model's reasoning blocks by default."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p webview",
+    "test": "vitest run",
+    "package": "npm run build -- --production && vsce package --no-dependencies",
+    "vscode:prepublish": "node esbuild.mjs --production"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@types/vscode": "~1.95.0",
+    "@vscode/codicons": "^0.0.36",
+    "@vscode/vsce": "^3.2.1",
+    "dompurify": "^3.2.4",
+    "esbuild": "^0.24.2",
+    "highlight.js": "^11.12.0",
+    "marked": "^15.0.6",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}
