@@ -68,6 +68,8 @@ Open a folder, click the Tellico icon in the activity bar, and type.
 | Setting | Default | |
 |---|---|---|
 | `tellico.launcherPath` | `opencode-tellico` | Found on `PATH` or in `~/.local/bin`. |
+| `tellico.connection` | `installed` | `tunnel` (SSH), `gateway` (API key) or whatever `./install.sh` set up. |
+| `tellico.gatewayUrl` | empty | Gateway base URL; empty uses the one `./install.sh` recorded. |
 | `tellico.leadNode` | `auto` | `auto` derives a stable node from this device, like the launcher. |
 | `tellico.defaultMode` | `build` | `orchestrate` lets the lead delegate to the two workers. |
 | `tellico.defaultThink` | `medium` | Starting thinking level for new sessions. |
@@ -77,6 +79,26 @@ Open a folder, click the Tellico icon in the activity bar, and type.
 | `tellico.showReasoning` | `false` | Expand reasoning blocks by default. |
 
 Changing a server setting offers to restart the server.
+
+## SSH or API key
+
+Pick how the models are reached from the plug icon in the chat box, the
+**Tellico: Switch Connection** command, or `tellico.connection`; the status
+bar shows which is in use (`· SSH` / `· gateway`). Switching restarts the
+server, and sessions carry over.
+
+- **SSH tunnel** uses your cluster account, exactly like a tunnel-mode
+  install: the launcher brings the tunnel up and fetches the cluster key.
+- **API gateway** uses a per-user key and no SSH. The first time, the
+  extension asks for the key (**Tellico: Set Gateway API Key** changes it
+  later) and stores it in `~/.config/tellico-qwen` with mode 600 -- the
+  same place the launcher and `./install.sh --gateway` keep keys, guarded by
+  the same secret guards. It is never put in VS Code settings.
+
+Each connection keeps its own key file, so switching never overwrites the
+other one. Under the hood this is `opencode-tellico --connection
+tunnel|gateway`, which needs a tellico-agentic-setup install from after that
+flag was added (`./install.sh --no-start` updates one).
 
 ## Keys
 

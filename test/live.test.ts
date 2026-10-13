@@ -1,5 +1,6 @@
 // End-to-end smoke test against a real `opencode-tellico serve`. It uses a
-// cluster slot, so it never runs in CI: `TELLICO_LIVE=1 npx vitest run test/live.test.ts`.
+// cluster slot, so it never runs in CI: `TELLICO_LIVE=1 npx vitest run test/live.test.ts`,
+// optionally with TELLICO_LIVE_CONNECTION=tunnel or gateway.
 // Needs an installed tellico-agentic-setup client and a writable scratch dir.
 
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -22,7 +23,15 @@ describe.skipIf(!live)("live opencode-tellico serve", () => {
     writeFileSync(join(dir, "calc.py"), "def add(a, b):\n    return a - b\n");
 
     const logs: string[] = [];
-    const manager = new ServerManager(dir, () => ({ launcherPath: "opencode-tellico", leadNode: "auto", magicContext: true, backgroundSubagents: true }), {
+    const manager = new ServerManager(dir, () => ({
+      launcherPath: "opencode-tellico",
+      leadNode: "auto",
+      magicContext: true,
+      backgroundSubagents: true,
+      // TELLICO_LIVE_CONNECTION=tunnel|gateway runs the same test over either.
+      connection: (process.env.TELLICO_LIVE_CONNECTION as "tunnel" | "gateway" | undefined) ?? "installed",
+      gatewayUrl: "",
+    }), {
       onState: () => {},
       onLog: (l) => logs.push(l),
     });

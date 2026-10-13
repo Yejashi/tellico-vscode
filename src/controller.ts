@@ -10,6 +10,7 @@ import { Store } from "./state/reducer";
 import { Mode, ModelRef, parseTellicoAgent, SessionView, tellicoAgent, ThinkLevel } from "../shared/model";
 import { EditorContext, HostToWebview, Prefs, ServerStatus, WebviewToHost } from "../shared/protocol";
 import { reversePatch } from "./diff/patch";
+import { ConnectionSetting, effectiveConnection, hasKey, installedMode, writeGatewayKey } from "./server/connection";
 import { BEFORE_SCHEME, BeforeContentProvider } from "./diff/beforeProvider";
 
 /** What the controller needs from a webview, sidebar or tab alike. */
@@ -53,6 +54,7 @@ export class Controller implements vscode.Disposable {
       showReasoning: cfg.get<boolean>("showReasoning", false),
       root: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
     };
+    this.refreshConnectionPrefs();
     this.statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     this.statusItem.command = "tellico.focus";
     this.statusItem.show();
@@ -71,8 +73,12 @@ export class Controller implements vscode.Disposable {
           this.broadcast({ type: "prefs", prefs: this.prefs });
         }
         if (
-          ["launcherPath", "leadNode", "magicContext", "backgroundSubagents"].some((k) => e.affectsConfiguration(`tellico.${k}`))
+          ["launcherPath", "leadNode", "magicContext", "backgroundSubagents", "connection", "gatewayUrl"].some((k) =>
+            e.affectsConfiguration(`tellico.${k}`),
+          )
         ) {
+          // A connection change made from the chat restarts by itself.
+          if (this.restartingForConnection) return;
           void vscode.window
             .showInformationMessage("Tellico server settings changed.", "Restart Server")
             .then((pick) => pick && this.restart());
@@ -127,6 +133,8 @@ export class Controller implements vscode.Disposable {
     const c = vscode.workspace.getConfiguration("tellico");
     return {
       launcherPath: c.get("launcherPath", "opencode-tellico"),
+      connection: c.get<ConnectionSetting>("connection", "installed"),
+      gatewayUrl: c.get<string>("gatewayUrl", ""),
       leadNode: c.get("leadNode", "auto") as LaunchSettings["leadNode"],
       magicContext: c.get("magicContext", true),
       backgroundSubagents: c.get("backgroundSubagents", true),
@@ -195,6 +203,59 @@ export class Controller implements vscode.Disposable {
     return v === "0" ? 0 : v === "1" ? 1 : undefined;
   }
 
+  private restartingForConnection = false;
+
+  private refreshConnectionPrefs() {
+    const setting = vscode.workspace.getConfiguration("tellico").get<ConnectionSetting>("connection", "installed");
+    this.prefs.connectionSetting = setting;
+    this.prefs.connection = effectiveConnection(setting);
+  }
+
+  /** Switches SSH/gateway for this device and restarts the server on it. */
+  async setConnection(setting: ConnectionSetting) {
+    const target = setting === "installed" ? installedMode() : setting;
+    if (target === "gateway" && !hasKey("gateway")) {
+      const ok = await this.promptGatewayKey();
+      if (!ok) return;
+    }
+    this.restartingForConnection = true;
+    try {
+      await vscode.workspace.getConfiguration("tellico").update("connection", setting, vscode.ConfigurationTarget.Global);
+    } finally {
+      this.restartingForConnection = false;
+    }
+    this.refreshConnectionPrefs();
+    this.broadcast({ type: "prefs", prefs: this.prefs });
+    await this.restart();
+  }
+
+  /** Asks for the gateway key and stores it where the launcher reads it. */
+  async promptGatewayKey(): Promise<boolean> {
+    const key = await vscode.window.showInputBox({
+      title: "Tellico gateway API key",
+      prompt: "The per-user key from whoever runs the Tellico gateway. Stored in ~/.config/tellico-qwen with mode 600.",
+      password: true,
+      ignoreFocusOut: true,
+      validateInput: (v) => (v.trim() ? undefined : "Paste the key"),
+    });
+    if (!key) return false;
+    const path = writeGatewayKey(key);
+    this.log.info(`gateway key stored in ${path}`);
+    void vscode.window.showInformationMessage("Gateway API key saved.");
+    return true;
+  }
+
+  async pickConnection() {
+    const installed = installedMode();
+    const items: (vscode.QuickPickItem & { value: ConnectionSetting })[] = [
+      { value: "tunnel", label: "$(remote) SSH tunnel", description: installed === "tunnel" ? "installed" : "", detail: "Your cluster account; the launcher brings the SSH tunnel up." },
+      { value: "gateway", label: "$(cloud) API gateway", description: installed === "gateway" ? "installed" : "", detail: hasKey("gateway") ? "Per-user API key, no SSH." : "Per-user API key, no SSH. You will be asked for the key." },
+      { value: "installed", label: "$(settings-gear) As installed", description: installed, detail: "Whatever ./install.sh set up on this device." },
+    ];
+    const pick = await vscode.window.showQuickPick(items, { title: "Reach Tellico through…" });
+    if (pick) await this.setConnection(pick.value);
+  }
+
   private setServer(status: ServerStatus) {
     this.serverStatus = status;
     this.broadcast({ type: "server", status });
@@ -205,7 +266,8 @@ export class Controller implements vscode.Disposable {
     const s = this.serverStatus;
     const busy = [...this.store.sessions.values()].some((x) => x.status === "busy" && !x.parentID);
     const icon = s.kind === "ready" ? (busy ? "$(sync~spin)" : "$(hubot)") : s.kind === "starting" ? "$(loading~spin)" : s.kind === "failed" ? "$(error)" : "$(circle-slash)";
-    this.statusItem.text = `${icon} Tellico${s.kind === "ready" ? ` · ${this.prefs.mode} · node ${this.prefs.node}` : ""}`;
+    const via = this.prefs.connection === "gateway" ? "gateway" : "SSH";
+    this.statusItem.text = `${icon} Tellico${s.kind === "ready" ? ` · ${this.prefs.mode} · node ${this.prefs.node} · ${via}` : ""}`;
     this.statusItem.tooltip = s.kind === "failed" ? s.message : `Tellico server: ${s.kind}`;
   }
 
@@ -392,6 +454,9 @@ export class Controller implements vscode.Disposable {
         await vscode.env.clipboard.writeText(msg.text);
         void vscode.window.setStatusBarMessage("$(check) Copied", 1500);
         return;
+      case "setGatewayKey":
+        if (await this.promptGatewayKey()) await this.restart();
+        return;
       case "restartServer":
         return this.restart();
       case "showLogs":
@@ -450,6 +515,10 @@ export class Controller implements vscode.Disposable {
   }
 
   private async setPrefs(view: ChatView, p: Partial<Prefs>) {
+    if (p.connectionSetting !== undefined) {
+      await this.setConnection(p.connectionSetting);
+      return;
+    }
     const prev = { ...this.prefs };
     Object.assign(this.prefs, p);
     if (p.attachActiveEditor !== undefined) {

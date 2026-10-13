@@ -37,6 +37,10 @@ export function activate(context: vscode.ExtensionContext) {
       if (v) controller!.insertSelectionReference(v);
     }),
     vscode.commands.registerCommand("tellico.restartServer", () => controller!.restart()),
+    vscode.commands.registerCommand("tellico.switchConnection", () => controller!.pickConnection()),
+    vscode.commands.registerCommand("tellico.setGatewayKey", async () => {
+      if (await controller!.promptGatewayKey()) await controller!.restart();
+    }),
     vscode.commands.registerCommand("tellico.showLogs", () => controller!.showLogs()),
     vscode.commands.registerCommand("tellico.openChanges", (path: string) => {
       const v = activeView();

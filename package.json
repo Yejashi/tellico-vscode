@@ -73,6 +73,18 @@
         "category": "Tellico"
       },
       {
+        "command": "tellico.switchConnection",
+        "title": "Switch Connection (SSH / Gateway)",
+        "category": "Tellico",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "tellico.setGatewayKey",
+        "title": "Set Gateway API Key",
+        "category": "Tellico",
+        "icon": "$(key)"
+      },
+      {
         "command": "tellico.restartServer",
         "title": "Restart Server",
         "category": "Tellico"
@@ -144,6 +156,26 @@
           "type": "string",
           "default": "opencode-tellico",
           "description": "The opencode-tellico launcher from tellico-agentic-setup. A bare name is looked up on PATH and in ~/.local/bin."
+        },
+        "tellico.connection": {
+          "type": "string",
+          "enum": [
+            "installed",
+            "tunnel",
+            "gateway"
+          ],
+          "default": "installed",
+          "enumDescriptions": [
+            "Whatever ./install.sh set up on this device.",
+            "Over your own SSH connection to the cluster (needs a cluster account).",
+            "Through the API gateway with your per-user key (no SSH). Set the key with \"Tellico: Set Gateway API Key\"."
+          ],
+          "description": "How the extension reaches the Tellico models. Each connection keeps its own key, so you can switch freely."
+        },
+        "tellico.gatewayUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Gateway base URL for the gateway connection, e.g. https://host/v1. Empty uses the one install.sh recorded."
         },
         "tellico.leadNode": {
           "type": "string",

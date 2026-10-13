@@ -504,7 +504,15 @@ interface MenuItem<T> {
 }
 
 /** A footer button that opens a small menu above it, in place of a native <select>. */
-function MenuButton<T extends string | number>(props: { icon: string; label: string; title: string; value: T; items: MenuItem<T>[]; onPick(v: T): void }) {
+function MenuButton<T extends string | number>(props: {
+  icon: string;
+  label?: string;
+  title: string;
+  value: T;
+  items: MenuItem<T>[];
+  onPick(v: T): void;
+  footer?: { label: string; icon: string; onClick(): void };
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -517,7 +525,7 @@ function MenuButton<T extends string | number>(props: { icon: string; label: str
     <div className="menu-anchor" ref={ref}>
       <button className={`foot-btn ${open ? "on" : ""}`} title={props.title} onClick={() => setOpen(!open)}>
         <Icon name={props.icon} />
-        <span>{props.label}</span>
+        {props.label && <span>{props.label}</span>}
       </button>
       {open && (
         <div className="menu">
@@ -531,6 +539,12 @@ function MenuButton<T extends string | number>(props: { icon: string; label: str
               {it.value === props.value && <Icon name="check" />}
             </div>
           ))}
+          {props.footer && (
+            <div className="menu-item menu-footer" onClick={() => (props.footer!.onClick(), setOpen(false))}>
+              <Icon name={props.footer.icon} />
+              <span>{props.footer.label}</span>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -667,6 +681,19 @@ function Composer(props: { state: State; busy: boolean; readOnly: boolean }) {
                 value={prefs.think}
                 items={THINK_LEVELS.map((l) => ({ value: l, label: l[0].toUpperCase() + l.slice(1), detail: THINK_DETAIL[l] }))}
                 onPick={(think) => post({ type: "setPrefs", prefs: { think } })}
+              />
+              <span className="divider" />
+              <MenuButton
+                icon={prefs.connection === "gateway" ? "cloud" : "remote"}
+                title={`Connection: ${prefs.connection === "gateway" ? "API gateway" : "SSH tunnel"}`}
+                value={prefs.connectionSetting ?? "installed"}
+                items={[
+                  { value: "tunnel", label: "SSH tunnel", detail: "Your cluster account, over SSH" },
+                  { value: "gateway", label: "API gateway", detail: "Per-user API key, no SSH" },
+                  { value: "installed", label: "As installed", detail: "Whatever ./install.sh set up" },
+                ]}
+                onPick={(connectionSetting) => post({ type: "setPrefs", prefs: { connectionSetting } })}
+                footer={{ label: "Set gateway API key…", icon: "key", onClick: () => post({ type: "setGatewayKey" }) }}
               />
             </>
           )}

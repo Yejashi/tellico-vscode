@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Choose SSH tunnel or API gateway from the chat box, a command or
+  `tellico.connection`; the gateway key is asked for once and stored with
+  mode 600 beside the client's other keys. The status bar shows the
+  connection. Needs `opencode-tellico --connection` from tellico-agentic-setup.
+
 ## 0.1.0 -- 2026-10-13
 
 First release.

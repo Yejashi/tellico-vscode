@@ -30,6 +30,9 @@ export interface Prefs {
   showReasoning: boolean;
   /** Absolute workspace folder, for showing tool paths relative to it. */
   root?: string;
+  /** How the models are reached right now, and whether the setting pins it. */
+  connection?: "tunnel" | "gateway";
+  connectionSetting?: "installed" | "tunnel" | "gateway";
 }
 
 /** Session metadata without the transcript. */
@@ -58,7 +61,8 @@ export type WebviewToHost =
   | { type: "newSession" }
   | { type: "history" }
   | { type: "openSession"; id: string; inNewTab?: boolean }
-  | { type: "setPrefs"; prefs: Partial<Pick<Prefs, "mode" | "node" | "think" | "attachActiveEditor">> }
+  | { type: "setPrefs"; prefs: Partial<Pick<Prefs, "mode" | "node" | "think" | "attachActiveEditor" | "connectionSetting">> }
+  | { type: "setGatewayKey" }
   | { type: "permission"; sessionID: string; requestID: string; decision: "once" | "always" | "reject" }
   | { type: "formReply"; sessionID: string; formID: string; answer: Record<string, unknown> }
   | { type: "formCancel"; sessionID: string; formID: string }

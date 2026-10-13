@@ -366,6 +366,8 @@ kbd {
 .menu-item:hover, .menu-item.on { background: var(--vscode-list-hoverBackground); }
 .menu-item.on .codicon-check { color: var(--tc-accent); }
 .menu-detail { font-size: 0.85em; color: var(--tc-muted); }
+.menu-footer { margin-top: 4px; border-top: 1px solid var(--tc-hairline); border-radius: 0 0 5px 5px; color: var(--tc-muted); }
+.composer-foot .menu-anchor:last-of-type .menu { left: auto; right: -34px; }
 .menu-item .cmd { font-family: var(--tc-mono); font-size: 0.92em; color: var(--tc-accent); flex: none; }
 
 /* ---------- motion ---------- */

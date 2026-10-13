@@ -15,6 +15,9 @@ import { Api, Connection } from "./api";
 
 export interface LaunchSettings {
   launcherPath: string;
+  /** "installed" uses whatever install.sh set up; otherwise this launch only. */
+  connection: "installed" | "tunnel" | "gateway";
+  gatewayUrl: string;
   leadNode: "auto" | "0" | "1";
   magicContext: boolean;
   backgroundSubagents: boolean;
@@ -92,6 +95,12 @@ export class ServerManager {
     env.PATH = [join(homedir(), ".local", "bin"), env.PATH ?? ""].join(delimiter);
     env.OPENCODE_PASSWORD = password;
     env.TELLICO_BACKGROUND_SUBAGENTS = s.backgroundSubagents ? "1" : "0";
+    // Explicit either way, so a value inherited from VS Code's own shell
+    // cannot silently pick the connection.
+    delete env.TELLICO_CONNECTION;
+    delete env.TELLICO_CONNECTION_GATEWAY_URL;
+    if (s.connection !== "installed") env.TELLICO_CONNECTION = s.connection;
+    if (s.gatewayUrl.trim()) env.TELLICO_CONNECTION_GATEWAY_URL = s.gatewayUrl.trim().replace(/\/+$/, "");
     // A stale value inherited from the shell VS Code started in must not win
     // over the user's explicit setting.
     if (s.leadNode !== "auto") env.TELLICO_LEAD_NODE = s.leadNode;
@@ -135,6 +144,21 @@ export class ServerManager {
         if (!settled) {
           // A launcher installed before serve mode passes "serve" through to
           // opencode behind --standalone, which opencode then rejects.
+          if (/no gateway API key/.test(tail)) {
+            fail("No gateway API key on this device yet. Run \"Tellico: Set Gateway API Key\", or switch the connection to SSH.");
+            return;
+          }
+          if (/models\s+unauthorized/.test(tail)) {
+            fail("The gateway rejected the API key. Set it again with \"Tellico: Set Gateway API Key\".");
+            return;
+          }
+          if (/unknown connection|--connection requires/.test(tail)) {
+            fail(
+              "The installed opencode-tellico has no --connection yet. Update the client: " +
+                "run ./install.sh --no-start in your tellico-agentic-setup checkout, then retry.",
+            );
+            return;
+          }
           if (/Unrecognized flag: --standalone in command opencode serve/.test(tail)) {
             fail(
               "The installed opencode-tellico predates serve mode. Update the client: " +
