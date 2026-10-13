@@ -230,6 +230,11 @@
           "type": "boolean",
           "default": false,
           "description": "Expand the model's reasoning blocks by default."
+        },
+        "tellico.smoothStreaming": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reveal streamed text at a steady pace, like a chat app, instead of showing each cluster of tokens as it arrives. Works the same over SSH and the gateway."
         }
       }
     }

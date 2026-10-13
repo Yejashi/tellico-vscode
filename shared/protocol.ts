@@ -28,6 +28,8 @@ export interface Prefs {
   think: ThinkLevel;
   attachActiveEditor: boolean;
   showReasoning: boolean;
+  /** Pace streamed text like a chat app instead of showing token clusters as they land. */
+  smoothStreaming?: boolean;
   /** Absolute workspace folder, for showing tool paths relative to it. */
   root?: string;
   /** How the models are reached right now, and whether the setting pins it. */

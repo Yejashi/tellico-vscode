@@ -10,7 +10,8 @@ and Magic Context as `opencode-tellico`, in VS Code instead of a terminal.
 </p>
 
 - **Streaming chat** in the sidebar or in editor tabs (`Ctrl+Shift+Esc`),
-  with collapsible reasoning and a card per tool call.
+  paced like a chat app so text flows steadily over SSH or the gateway, with
+  collapsible reasoning and a card per tool call.
 - **build / orchestrate**, **node 0 / 1** and **thinking level** pickers, the
   same choices as `opencode-tellico [0|1] [--orchestrate] [--think LEVEL]`.
 - **Workers panel**: every subagent the lead dispatches, with live status;
@@ -77,6 +78,7 @@ Open a folder, click the Tellico icon in the activity bar, and type.
 | `tellico.backgroundSubagents` | `true` | Off if worker reports go missing. |
 | `tellico.attachActiveEditor` | `true` | Attach the active file to each message. |
 | `tellico.showReasoning` | `false` | Expand reasoning blocks by default. |
+| `tellico.smoothStreaming` | `true` | Pace streamed text steadily instead of showing token clusters as they land. |
 
 Changing a server setting offers to restart the server.
 

@@ -52,6 +52,7 @@ export class Controller implements vscode.Disposable {
       think: cfg.get<ThinkLevel>("defaultThink", "medium"),
       attachActiveEditor: cfg.get<boolean>("attachActiveEditor", true),
       showReasoning: cfg.get<boolean>("showReasoning", false),
+      smoothStreaming: cfg.get<boolean>("smoothStreaming", true),
       root: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
     };
     this.refreshConnectionPrefs();
@@ -66,9 +67,12 @@ export class Controller implements vscode.Disposable {
       vscode.window.onDidChangeActiveTextEditor(() => this.updateContext()),
       vscode.window.onDidChangeTextEditorSelection(() => this.updateContext()),
       vscode.workspace.onDidChangeConfiguration((e) => {
-        if (e.affectsConfiguration("tellico.showReasoning") || e.affectsConfiguration("tellico.attachActiveEditor")) {
+        if (
+          ["showReasoning", "attachActiveEditor", "smoothStreaming"].some((k) => e.affectsConfiguration(`tellico.${k}`))
+        ) {
           const c = vscode.workspace.getConfiguration("tellico");
           this.prefs.showReasoning = c.get("showReasoning", false);
+          this.prefs.smoothStreaming = c.get("smoothStreaming", true);
           this.prefs.attachActiveEditor = c.get("attachActiveEditor", true);
           this.broadcast({ type: "prefs", prefs: this.prefs });
         }

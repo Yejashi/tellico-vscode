@@ -6,6 +6,7 @@ import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
 import type { AssistantMessage, ChildSession, FormQuestion, Message, PermissionRequest, ReasoningBlock, ThinkLevel, ToolBlock } from "../shared/model";
 import { stripMarkers, THINK_LEVELS } from "../shared/model";
+import { advance, hidePartialMarker, safeCut } from "./smooth";
 import type { EditorContext, HostToWebview, Prefs, ServerStatus, SessionMeta, WebviewToHost } from "../shared/protocol";
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): any; setState(s: any): void };
@@ -94,6 +95,57 @@ function useTicker(active: boolean, ms = 1000) {
     const t = setInterval(() => setN((n) => n + 1), ms);
     return () => clearInterval(t);
   }, [active, ms]);
+}
+
+// ---------------- smooth streaming ----------------
+
+const reducedMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+/** Set from prefs; read by every paced block. */
+let smoothEnabled = true;
+
+/**
+ * Text revealed at a steady pace while `live`. A block that is complete when
+ * it mounts (history, a reopened session) shows at once. One animation-frame
+ * loop per streaming block, and only while it has a backlog to show.
+ */
+function useSmoothText(text: string, live: boolean): string {
+  const [shown, setShown] = useState(() => (live && smoothEnabled && !reducedMotion ? 0 : text.length));
+  const pos = useRef(shown);
+  const target = useRef(text.length);
+  const done = useRef(!live);
+  const frame = useRef(0);
+  target.current = text.length;
+  done.current = !live;
+
+  useEffect(() => {
+    if (!smoothEnabled || reducedMotion) {
+      pos.current = text.length;
+      setShown(text.length);
+      return;
+    }
+    if (frame.current || pos.current >= target.current) return;
+    let last = performance.now();
+    const tick = (now: number) => {
+      // Cap dt so a hidden tab does not dump its whole backlog in one frame.
+      const dt = Math.min(64, now - last);
+      last = now;
+      pos.current = advance(pos.current, target.current, dt, done.current);
+      const n = Math.floor(pos.current);
+      setShown((prev) => (prev === n ? prev : n));
+      frame.current = pos.current < target.current ? requestAnimationFrame(tick) : 0;
+    };
+    frame.current = requestAnimationFrame(tick);
+  }, [text, live]);
+
+  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+  return text.slice(0, safeCut(text, shown));
+}
+
+/** A streaming markdown block; the paced prefix is what gets parsed. */
+function LiveMarkdown({ text, live }: { text: string; live: boolean }) {
+  const shown = useSmoothText(text, live);
+  if (!shown.trim()) return null;
+  return <Markdown text={shown} />;
 }
 
 // ---------------- icons ----------------
@@ -287,10 +339,15 @@ const Reasoning = memo(function Reasoning({ b, defaultOpen }: { b: ReasoningBloc
         {b.done ? <span>Thought{secs ? ` for ${secs}s` : ""}</span> : <span className="shimmer">Thinking{secs ? ` · ${secs}s` : "…"}</span>}
         <Icon name="chevron-right" className="thought-chevron" />
       </div>
-      {open && <div className="thought-body">{b.text.trim()}</div>}
+      {open && <ThoughtBody text={b.text} live={!b.done} />}
     </div>
   );
 });
+
+function ThoughtBody({ text, live }: { text: string; live: boolean }) {
+  const shown = useSmoothText(text, live);
+  return <div className="thought-body">{shown.trim()}</div>;
+}
 
 /** Consecutive tool calls render as one timeline group, like a run of steps. */
 const AssistantView = memo(function AssistantView({ m, showReasoning, root }: { m: AssistantMessage; showReasoning: boolean; root?: string }) {
@@ -313,8 +370,8 @@ const AssistantView = memo(function AssistantView({ m, showReasoning, root }: { 
     }
     flush(`s${i}`);
     if (b.type === "text") {
-      const text = stripMarkers(b.text);
-      if (text.trim()) groups.push(<Markdown key={i} text={text} />);
+      const text = hidePartialMarker(stripMarkers(b.text));
+      if (text.trim() || !b.done) groups.push(<LiveMarkdown key={i} text={text} live={!b.done && !m.done} />);
     } else groups.push(<Reasoning key={i} b={b} defaultOpen={showReasoning} />);
   });
   flush("end");
@@ -341,10 +398,23 @@ function Transcript({ messages, showReasoning, root, busy }: { messages: Message
   const busySince = useRef(0);
   if (busy && !busySince.current) busySince.current = Date.now();
   if (!busy) busySince.current = 0;
+  const inner = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const el = ref.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   });
+  // Paced text grows inside its own component, without re-rendering this one,
+  // so follow the content's height rather than our own renders.
+  useEffect(() => {
+    const el = ref.current;
+    const body = inner.current;
+    if (!el || !body || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      if (stick.current) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(body);
+    return () => ro.disconnect();
+  }, []);
   const onScroll = () => {
     const el = ref.current!;
     stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
@@ -353,7 +423,7 @@ function Transcript({ messages, showReasoning, root, busy }: { messages: Message
   const streaming = Boolean(last && last.kind === "assistant" && !last.done && last.blocks.some((b) => b.type !== "tool" && !b.done));
   return (
     <div className="transcript" ref={ref} onScroll={onScroll}>
-      <div className="transcript-inner">
+      <div className="transcript-inner" ref={inner}>
         {messages.map((m) =>
           m.kind === "user" ? (
             <div key={m.id} className="user">
@@ -764,6 +834,7 @@ function Empty({ ready }: { ready: boolean }) {
 
 function App() {
   const state = useHostState();
+  smoothEnabled = state.prefs?.smoothStreaming ?? true;
   const s = state.session;
   const busy = s?.status === "busy";
   const root = state.prefs?.root;

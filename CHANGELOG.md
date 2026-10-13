@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Smooth streaming: answers and reasoning are revealed at a steady,
+  backlog-following pace like a chat app, instead of in the clusters the
+  server's speculative decoding emits (and through the odd network pause).
+  Measured in the webview: text advanced on every frame of a live answer,
+  1-13 characters per frame, no pauses. `tellico.smoothStreaming` turns it
+  off; reduced-motion is respected.
+
 - Choose SSH tunnel or API gateway from the chat box, a command or
   `tellico.connection`; the gateway key is asked for once and stored with
   mode 600 beside the client's other keys. The status bar shows the
