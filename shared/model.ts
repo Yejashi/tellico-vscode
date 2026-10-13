@@ -53,6 +53,24 @@ export interface UserMessage {
   created: number;
 }
 
+/** Tokens one step (one model call) used, as the server reports them at its end. */
+export interface StepTokens {
+  input: number;
+  output: number;
+  reasoning: number;
+  cacheRead: number;
+}
+
+/**
+ * Epoch ms of one step: the request went out, the first token arrived, the
+ * stream ended. Live events and history give the same three points.
+ */
+export interface StepTiming {
+  start: number;
+  firstToken?: number;
+  end?: number;
+}
+
 export interface AssistantMessage {
   kind: "assistant";
   id: string;
@@ -62,6 +80,8 @@ export interface AssistantMessage {
   created: number;
   done: boolean;
   finish?: string;
+  tokens?: StepTokens;
+  timing?: StepTiming;
 }
 
 export interface NoticeMessage {

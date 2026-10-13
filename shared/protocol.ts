@@ -19,7 +19,9 @@ export interface EditorContext {
 export interface SessionSummary {
   id: string;
   title: string;
+  created: number;
   updated: number;
+  agent?: string;
 }
 
 export interface Prefs {
@@ -35,6 +37,8 @@ export interface Prefs {
   /** How the models are reached right now, and whether the setting pins it. */
   connection?: "tunnel" | "gateway";
   connectionSetting?: "installed" | "tunnel" | "gateway";
+  /** tellico.magicContext: whether the launcher loads the Magic Context plugin. */
+  magicContext?: boolean;
 }
 
 /** Session metadata without the transcript. */
@@ -52,6 +56,10 @@ export type HostToWebview =
    */
   | { type: "session"; session: SessionMeta; from: number; tail: Message[] }
   | { type: "noSession" }
+  /** Top-level sessions, most recent first, for the session browser. */
+  | { type: "sessions"; sessions: SessionSummary[] }
+  /** Open the session browser (the view title's history button). */
+  | { type: "showHistory" }
   | { type: "insertText"; text: string }
   | { type: "error"; message: string };
 
@@ -61,7 +69,8 @@ export type WebviewToHost =
   | { type: "command"; name: string; text: string }
   | { type: "interrupt" }
   | { type: "newSession" }
-  | { type: "history" }
+  | { type: "listSessions" }
+  | { type: "deleteSession"; id: string }
   | { type: "openSession"; id: string; inNewTab?: boolean }
   | { type: "setPrefs"; prefs: Partial<Pick<Prefs, "mode" | "node" | "think" | "attachActiveEditor" | "connectionSetting">> }
   | { type: "setGatewayKey" }

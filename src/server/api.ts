@@ -34,6 +34,7 @@ export interface SessionInfo {
   parentID?: string;
   agent?: string;
   model?: ModelRef;
+  created: number;
   updated: number;
 }
 
@@ -219,6 +220,7 @@ function toSessionInfo(s: any): SessionInfo {
     parentID: s.parentID ?? undefined,
     agent: s.agent ?? undefined,
     model: s.model ?? undefined,
+    created: s.time?.created ?? 0,
     updated: s.time?.updated ?? s.time?.created ?? 0,
   };
 }

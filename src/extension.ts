@@ -29,7 +29,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("tellico.history", async () => {
       await vscode.commands.executeCommand("tellico.chat.focus");
       const v = activeView();
-      if (v) await controller!.pickHistory(v);
+      if (v) await controller!.showHistory(v);
     }),
     vscode.commands.registerCommand("tellico.addSelection", async () => {
       await vscode.commands.executeCommand("tellico.chat.focus");

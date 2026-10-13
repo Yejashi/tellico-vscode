@@ -53,6 +53,7 @@ export class Controller implements vscode.Disposable {
       attachActiveEditor: cfg.get<boolean>("attachActiveEditor", true),
       showReasoning: cfg.get<boolean>("showReasoning", false),
       smoothStreaming: cfg.get<boolean>("smoothStreaming", true),
+      magicContext: cfg.get<boolean>("magicContext", true),
       root: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
     };
     this.refreshConnectionPrefs();
@@ -81,6 +82,7 @@ export class Controller implements vscode.Disposable {
             e.affectsConfiguration(`tellico.${k}`),
           )
         ) {
+          this.prefs.magicContext = vscode.workspace.getConfiguration("tellico").get("magicContext", true);
           // A connection change made from the chat restarts by itself.
           if (this.restartingForConnection) return;
           void vscode.window
@@ -424,8 +426,10 @@ export class Controller implements vscode.Disposable {
         this.remember(view);
         view.post({ type: "noSession" });
         return;
-      case "history":
-        return this.pickHistory(view);
+      case "listSessions":
+        return this.sendSessions(view);
+      case "deleteSession":
+        return this.deleteSession(msg.id);
       case "openSession":
         if (msg.inNewTab) {
           await vscode.commands.executeCommand("tellico.openInTab", msg.id);
@@ -570,20 +574,36 @@ export class Controller implements vscode.Disposable {
     view.reveal();
   }
 
-  async pickHistory(view: ChatView) {
+  /** The view title's history button: the webview shows its own browser. */
+  async showHistory(view: ChatView) {
+    view.reveal();
+    view.post({ type: "showHistory" });
+    await this.sendSessions(view);
+  }
+
+  private async sendSessions(...views: ChatView[]) {
     await this.ensureServer();
     if (!this.api) return;
-    const sessions = await this.api.sessions(100);
-    const pick = await vscode.window.showQuickPick(
-      sessions.map((s) => ({
-        label: s.title,
-        description: parseTellicoAgent(s.agent) ? `${s.agent}` : s.agent ?? "",
-        detail: new Date(s.updated).toLocaleString(),
-        id: s.id,
-      })),
-      { placeHolder: "Resume a Tellico session", matchOnDescription: true },
-    );
-    if (pick) await this.openSession(view, pick.id);
+    const sessions = (await this.api.sessions(200)).map((s) => ({ id: s.id, title: s.title, created: s.created, updated: s.updated, agent: s.agent }));
+    for (const v of views) v.post({ type: "sessions", sessions });
+  }
+
+  private async deleteSession(id: string) {
+    if (!this.api) return;
+    const title = (await this.api.session(id).catch(() => undefined))?.title ?? "this session";
+    const ok = await vscode.window.showWarningMessage(`Delete "${title}"? Its transcript cannot be recovered.`, { modal: true }, "Delete");
+    if (ok !== "Delete") return;
+    await this.api.remove(id);
+    this.store.sessions.delete(id);
+    for (const v of this.views) {
+      if (v.sessionID === id) {
+        v.sessionID = undefined;
+        v.sent = { length: 0 };
+        this.remember(v);
+        v.post({ type: "noSession" });
+      }
+    }
+    await this.sendSessions(...this.views);
   }
 
   // ---------- editor integration ----------

@@ -15,6 +15,7 @@ import {
   SessionStatus,
   TextBlock,
   SessionView,
+  StepTokens,
   ToolBlock,
 } from "../../shared/model";
 
@@ -127,12 +128,22 @@ export class Store {
         const msg = assistant(s, d.assistantMessageID, now);
         msg.agent = d.agent ?? msg.agent;
         msg.model = d.model ?? msg.model;
+        // Emitted with the first streamed chunk; `started` is when the request went out.
+        msg.timing = { start: d.started ?? msg.created, firstToken: now };
+        return [s.id];
+      }
+      case "session.step.streamed": {
+        const s = this.get(sid!);
+        const msg = assistant(s, d.assistantMessageID, now);
+        if (msg.timing) msg.timing.end = now;
         return [s.id];
       }
       case "session.step.ended": {
         const s = this.get(sid!);
         const msg = assistant(s, d.assistantMessageID, now);
         msg.finish = d.finish;
+        if (d.tokens) msg.tokens = toTokens(d.tokens);
+        if (msg.timing) msg.timing.end ??= now;
         if (d.finish !== "tool-calls") msg.done = true;
         for (const b of msg.blocks) if (b.type !== "tool") b.done = true;
         return [s.id];
@@ -202,8 +213,7 @@ export class Store {
       }
       case "session.usage.updated": {
         const s = this.get(sid!);
-        const t = d.tokens ?? {};
-        s.usage = { input: t.input ?? 0, output: t.output ?? 0, reasoning: t.reasoning ?? 0, cacheRead: t.cache?.read ?? 0 };
+        s.usage = toTokens(d.tokens);
         return [s.id];
       }
       case "permission.asked": {
@@ -288,6 +298,7 @@ export class Store {
             trackEdit(s, t);
           }
         }
+        const firstToken = (m.content ?? []).find((c: any) => c.time?.created)?.time.created;
         messages.push({
           kind: "assistant",
           id: m.id,
@@ -297,6 +308,8 @@ export class Store {
           created,
           done: Boolean(m.time?.completed),
           finish: m.finish,
+          ...(m.tokens ? { tokens: toTokens(m.tokens) } : {}),
+          ...(firstToken ? { timing: { start: created, firstToken, end: m.time?.streamed ?? m.time?.completed } } : {}),
         });
       } else if (m.type === "synthetic" && m.metadata?.source === "subagent") {
         messages.push({ kind: "notice", id: m.id, level: "info", text: `Worker ${m.metadata.agent ?? ""} ${m.metadata.state ?? ""}: ${m.description ?? ""}`, created });
@@ -381,6 +394,10 @@ function trackEdit(s: SessionView, t: ToolBlock) {
   if (!EDIT_TOOLS.has(t.name) || t.status !== "completed") return;
   const p = (t.input?.path ?? t.input?.filePath ?? t.input?.file_path) as string | undefined;
   if (typeof p === "string" && !s.changedFiles.includes(p)) s.changedFiles.push(p);
+}
+
+function toTokens(t: any): StepTokens {
+  return { input: t?.input ?? 0, output: t?.output ?? 0, reasoning: t?.reasoning ?? 0, cacheRead: t?.cache?.read ?? 0 };
 }
 
 function contentText(content: unknown): string | undefined {
