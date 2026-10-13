@@ -116,15 +116,12 @@ flag was added (`./install.sh --no-start` updates one).
   `./install.sh --no-start` in tellico-agentic-setup.
 - **Server fails to start**: *Tellico: Show Server Logs* shows the launcher's
   own output (tunnel, gateway and config errors appear there first).
-- **Thinking level seems to have no effect**: see "Known limitations".
+- **Thinking level seems to have no effect**: update the client
+  (`./install.sh --no-start` in tellico-agentic-setup); installs from before
+  2026-10-13 lose it on OpenCode 2.
 
 ## Known limitations
 
-- OpenCode 2.0.26 does not forward the providers' per-request options
-  (`chat_template_kwargs`, `temperature`, `top_p`) to the model server, so
-  the thinking picker -- like `--think` and `ctrl+t` in the terminal -- does
-  not reach the Qwen template yet. Measured on 2026-10-13 with a logging
-  proxy; the fix belongs in tellico-agentic-setup's config, not here.
 - One server per window, for the first workspace folder.
 
 ## Development
