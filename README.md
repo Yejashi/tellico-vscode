@@ -6,7 +6,7 @@ and Magic Context as `opencode-tellico`, in VS Code instead of a terminal.
 <p align="center">
   <img src="docs/welcome.png" width="320" alt="Tellico welcome screen with suggestions">
   &nbsp;
-  <img src="docs/session.png" width="320" alt="An orchestrate session: a worker dispatched, its completion, and the changed-files tray">
+  <img src="docs/session.png" width="320" alt="An orchestrate session: a worker dispatched, its completion, and the turn footer with tok/s">
 </p>
 
 - **Streaming chat** in the sidebar or in editor tabs (`Ctrl+Shift+Esc`),
