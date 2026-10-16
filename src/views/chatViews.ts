@@ -55,6 +55,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   resolveWebviewView(webviewView: vscode.WebviewView) {
     const webview = webviewView.webview;
+    // Content first: options set on an empty webview load a document with no CSP.
+    webview.html = html(webview, this.extensionUri);
     webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "dist")] };
     // Keep the session the sidebar showed across a hide/show.
     const previous = this.view?.sessionID ?? this.controller.rememberedSidebarSession;
@@ -67,7 +69,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       reveal: () => webviewView.show(true),
     };
     this.view = view;
-    webview.html = html(webview, this.extensionUri);
     const subs = bind(webview, this.controller, view);
     webviewView.onDidDispose(() => subs.forEach((d) => d.dispose()));
     this.applyBadge();

@@ -488,7 +488,9 @@
     "test": "vitest run",
     "package": "npm run build -- --production && vsce package --no-dependencies",
     "vscode:prepublish": "node esbuild.mjs --production",
-    "preview": "node esbuild.mjs && node scripts/preview/build.mjs"
+    "preview": "node esbuild.mjs && node scripts/preview/build.mjs",
+    "test:vscode": "node esbuild.mjs && node scripts/vscode-smoke.mjs",
+    "test:live": "TELLICO_LIVE=1 vitest run test/live.test.ts"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

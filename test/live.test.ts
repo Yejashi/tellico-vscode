@@ -13,6 +13,8 @@ import { EventStream } from "../src/server/events";
 import { ServerManager } from "../src/server/manager";
 import { Store } from "../src/state/reducer";
 import { reversePatch } from "../src/diff/patch";
+import { buildPromptFiles } from "../src/prompt";
+import { existsSync } from "node:fs";
 
 const live = process.env.TELLICO_LIVE === "1";
 
@@ -68,9 +70,11 @@ describe.skipIf(!live)("live opencode-tellico serve", () => {
 
       const info = await api.createSession(lead.id, { id: lead.modelID!, providerID: lead.providerID!, variant: "low" });
       sid = info.id;
-      await api.prompt(sid, "calc.py has a bug in add(). Fix it with the edit tool. Then answer in one short sentence.", [
-        { uri: "file://" + join(dir, "calc.py"), name: "calc.py" },
-      ]);
+      // Attached through an @-mention, as the composer sends it.
+      const text = "@calc.py has a bug in add(). Fix it with the edit tool. Then answer in one short sentence.";
+      const files = buildPromptFiles({ text, root: dir, exists: existsSync });
+      expect(files).toHaveLength(1);
+      await api.prompt(sid, text, files);
       await Promise.race([done, new Promise((_, rej) => setTimeout(() => rej(new Error("turn timed out")), 240_000))]);
       stream.stop();
 
@@ -81,13 +85,23 @@ describe.skipIf(!live)("live opencode-tellico serve", () => {
 
       const now = readFileSync(join(dir, "calc.py"), "utf8");
       expect(now).toContain("a + b");
-      const diff = (await api.diff(sid)).find((d) => d.file === "calc.py")!;
+      const users = s.messages.filter((m) => m.kind === "user");
+      const diff = (await api.diff(sid, { from: users[0].id, to: users[users.length - 1].id })).find((d) => d.file === "calc.py")!;
       expect(reversePatch(now, diff.patch)).toBe("def add(a, b):\n    return a - b\n");
 
-      const history = new Store().loadHistory(await api.session(sid), await api.messages(sid));
+      const history = new Store().loadHistory(await api.sessionRaw(sid), await api.messages(sid));
       expect(history.messages.filter((m) => m.kind === "assistant").length).toBe(
         s.messages.filter((m) => m.kind === "assistant").length,
       );
+      expect(history.messages.find((m) => m.kind === "user")).toMatchObject({ files: ["calc.py"] });
+
+      // Rewind to before the prompt restores the file; redo puts the fix back.
+      const restored = await api.revertStage(sid, users[0].id, true);
+      expect(restored.files).toContain("calc.py");
+      expect(readFileSync(join(dir, "calc.py"), "utf8")).toBe("def add(a, b):\n    return a - b\n");
+      expect((await api.sessionRaw(sid)).revert?.messageID).toBe(users[0].id);
+      await api.revertClear(sid);
+      expect(readFileSync(join(dir, "calc.py"), "utf8")).toBe(now);
     } finally {
       manager.stop();
     }

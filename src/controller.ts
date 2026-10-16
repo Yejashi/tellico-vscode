@@ -137,8 +137,12 @@ export class Controller implements vscode.Disposable {
       onState: (s) => this.onManagerState(s),
       onLog: (line) => this.log.info(line),
     });
-    this.starting = this.manager
-      .start()
+    // The manager reports "starting" synchronously, before this.starting is
+    // set: without the flag that looks like a crash restart and connects twice.
+    this.launching = true;
+    const started = this.manager.start();
+    this.launching = false;
+    this.starting = started
       .then(async (conn) => {
         await this.connect(conn);
         return conn;
@@ -183,7 +187,7 @@ export class Controller implements vscode.Disposable {
       this.api = undefined;
     }
     this.setServer(s.kind === "failed" ? { kind: "failed", message: s.message } : { kind: s.kind });
-    if (s.kind === "starting" && !this.starting && this.manager) {
+    if (s.kind === "starting" && !this.starting && !this.launching && this.manager) {
       // An automatic restart after a crash: reconnect once it is up.
       this.starting = new Promise((resolve) => {
         const check = setInterval(() => {
@@ -269,6 +273,7 @@ export class Controller implements vscode.Disposable {
   }
 
   private restartingForConnection = false;
+  private launching = false;
 
   private refreshConnectionPrefs() {
     const setting = vscode.workspace.getConfiguration("tellico").get<ConnectionSetting>("connection", "installed");
