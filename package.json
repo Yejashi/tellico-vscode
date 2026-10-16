@@ -245,7 +245,8 @@
     "typecheck": "tsc --noEmit -p . && tsc --noEmit -p webview",
     "test": "vitest run",
     "package": "npm run build -- --production && vsce package --no-dependencies",
-    "vscode:prepublish": "node esbuild.mjs --production"
+    "vscode:prepublish": "node esbuild.mjs --production",
+    "preview": "node esbuild.mjs && node scripts/preview/build.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
