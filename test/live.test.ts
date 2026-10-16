@@ -27,7 +27,7 @@ describe.skipIf(!live)("live opencode-tellico serve", () => {
       launcherPath: "opencode-tellico",
       leadNode: "auto",
       magicContext: true,
-      backgroundSubagents: true,
+      backgroundSubagents: false,
       // TELLICO_LIVE_CONNECTION=tunnel|gateway runs the same test over either.
       connection: (process.env.TELLICO_LIVE_CONNECTION as "tunnel" | "gateway" | undefined) ?? "installed",
       gatewayUrl: "",

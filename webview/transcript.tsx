@@ -2,7 +2,7 @@
 // rows), notices, turn footers, and the scroll container that follows them.
 
 import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { AssistantMessage, Message, ReasoningBlock, ToolBlock } from "../shared/model";
+import type { AssistantMessage, CompactionMessage, Message, ReasoningBlock, ShellMessage, ToolBlock } from "../shared/model";
 import { stripMarkers } from "../shared/model";
 import { TurnSummary, turnSummary } from "../shared/stats";
 import { hidePartialMarker } from "./smooth";
@@ -168,6 +168,40 @@ export const AssistantView = memo(function AssistantView({ m, showReasoning, roo
   return <div className="assistant">{groups}</div>;
 });
 
+/** A `!command` the user ran: the command, its exit status and output. */
+function ShellView({ m }: { m: ShellMessage }) {
+  const [open, setOpen] = useState(true);
+  const failed = m.status !== "running" && m.exit !== 0;
+  return (
+    <div className={`step shell-run ${m.status === "running" ? "step-running" : failed ? "step-error" : "step-completed"}`}>
+      <div className="step-head expandable" onClick={() => setOpen(!open)}>
+        <span className="step-verb">You ran</span>
+        <span className="step-target mono" title={m.command}>{m.command}</span>
+        {m.status !== "running" && <span className={`badge ${failed ? "err" : ""}`}>{m.status === "exited" ? `exit ${m.exit ?? "?"}` : m.status}</span>}
+        <Icon name="chevron-right" className={`step-chevron ${open ? "open" : ""}`} />
+      </div>
+      {open && m.output ? (
+        <div className="step-body"><pre>{m.output.length > 20000 ? m.output.slice(0, 20000) + "\n…" : m.output}</pre></div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Where the conversation was summarised to free context. */
+function CompactionView({ m }: { m: CompactionMessage }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={`compaction ${m.status}`}>
+      <div className="compaction-line" onClick={() => m.summary && setOpen(!open)}>
+        <Icon name={m.status === "failed" ? "warning" : "fold"} />
+        <span>{m.status === "failed" ? "Compaction failed" : m.status === "running" ? "Compacting…" : m.reason === "manual" ? "Conversation compacted" : "Context compacted automatically"}</span>
+        {m.summary && <Icon name="chevron-right" className={`step-chevron ${open ? "open" : ""}`} />}
+      </div>
+      {open && m.summary && <div className="compaction-summary">{m.summary}</div>}
+    </div>
+  );
+}
+
 // ---------------- transcript ----------------
 
 export function Working({ since }: { since: number }) {
@@ -254,10 +288,14 @@ export function Transcript({ messages, showReasoning, root, busy }: { messages: 
               <AssistantView m={m} showReasoning={showReasoning} root={root} />
               {footers.has(m.id) && <TurnFooter t={footers.get(m.id)!} />}
             </React.Fragment>
+          ) : m.kind === "shell" ? (
+            <ShellView key={m.id} m={m} />
+          ) : m.kind === "compaction" ? (
+            <CompactionView key={m.id} m={m} />
           ) : (
             <div key={m.id} className={`event event-${m.level}`}>
-              <Icon name={m.level === "error" ? "warning" : m.text.startsWith("Worker") ? "pass" : "info"} />
-              <span>{m.text}</span>
+              <Icon name={m.level === "error" ? "warning" : m.level === "warn" ? "shield" : m.text.startsWith("Worker") ? "pass" : "info"} />
+              <span>{m.level === "warn" ? <><b>Tellico guard: </b>{m.text}</> : m.text}</span>
             </div>
           ),
         )}

@@ -142,31 +142,7 @@ export class ServerManager {
         const current = this.proc === proc;
         if (current) this.proc = undefined;
         if (!settled) {
-          // A launcher installed before serve mode passes "serve" through to
-          // opencode behind --standalone, which opencode then rejects.
-          if (/no gateway API key/.test(tail)) {
-            fail("No gateway API key on this device yet. Run \"Tellico: Set Gateway API Key\", or switch the connection to SSH.");
-            return;
-          }
-          if (/models\s+unauthorized/.test(tail)) {
-            fail("The gateway rejected the API key. Set it again with \"Tellico: Set Gateway API Key\".");
-            return;
-          }
-          if (/unknown connection|--connection requires/.test(tail)) {
-            fail(
-              "The installed opencode-tellico has no --connection yet. Update the client: " +
-                "run ./install.sh --no-start in your tellico-agentic-setup checkout, then retry.",
-            );
-            return;
-          }
-          if (/Unrecognized flag: --standalone in command opencode serve/.test(tail)) {
-            fail(
-              "The installed opencode-tellico predates serve mode. Update the client: " +
-                "run ./install.sh --no-start in your tellico-agentic-setup checkout, then retry.",
-            );
-            return;
-          }
-          fail(`opencode-tellico exited before it was ready (code ${code}).\n${tail.trim().split("\n").slice(-6).join("\n")}`);
+          fail(explainExit(tail, code));
           return;
         }
         if (current && !this.disposed && this.state.kind === "ready") this.crashed();
@@ -226,6 +202,38 @@ export class ServerManager {
     this.state = state;
     this.events.onState(state);
   }
+}
+
+const UPDATE = "run ./install.sh --no-start in your tellico-agentic-setup checkout, then retry";
+
+/**
+ * Turns the launcher's last output before it exited into what to do about it.
+ * The patterns are the launcher's own messages (bin/opencode-tellico,
+ * bin/tellico-qwen-tunnel, lib/checks.sh in tellico-agentic-setup).
+ */
+export function explainExit(tail: string, code: number | null): string {
+  const has = (re: RegExp) => re.test(tail);
+  const line = (re: RegExp) => tail.split("\n").find((l) => re.test(l))?.replace(/^opencode-tellico:\s*/, "").trim();
+  if (has(/no gateway API key/)) return 'No gateway API key on this device yet. Run "Tellico: Set Gateway API Key", or switch the connection to SSH.';
+  if (has(/models\s+unauthorized|Invalid API key/)) return 'The gateway rejected the API key. Set it again with "Tellico: Set Gateway API Key".';
+  if (has(/no gateway URL/)) return "No gateway URL is configured for this device. Set tellico.gatewayUrl, or reinstall the client with ./install.sh --gateway.";
+  if (has(/models\s+no_allocation|Slurm allocation has probably ended/))
+    return "The gateway is up, but no Tellico allocation is running on the cluster. Ask the service owner to submit another, or try again later.";
+  if (has(/models\s+unreachable/)) return "The gateway is unreachable from this device. Check your network, or switch the connection to SSH.";
+  if (has(/one or both model servers are unavailable/))
+    return "The SSH tunnel is up, but a Tellico model server is not answering: the allocation may still be loading or may have ended. Check with: ssh tellico qwen38-status";
+  if (has(/Permission denied \(publickey|Host key verification failed|Could not resolve hostname|Connection timed out|Connection refused|No route to host/)) {
+    const why = line(/Permission denied|Host key verification|Could not resolve|timed out|refused|No route/);
+    return `SSH to the cluster failed${why ? `: ${why}` : ""}. Check your SSH key and network (VPN), or switch the connection to the API gateway.`;
+  }
+  if (has(/unknown connection|--connection requires/)) return `The installed opencode-tellico has no --connection yet. Update the client: ${UPDATE}.`;
+  if (has(/Unrecognized flag: --standalone in command opencode serve/)) return `The installed opencode-tellico predates serve mode. Update the client: ${UPDATE}.`;
+  if (has(/opencode is not installed or not on PATH/)) return "OpenCode is not installed, or not on the PATH VS Code sees. Install OpenCode 2 (opencode --version should say 2.x).";
+  if (has(/Magic Context needs/)) return `Magic Context is not installed for the client. Reinstall it (${UPDATE}), or turn off tellico.magicContext.`;
+  if (has(/Rerun install\.sh|missing .*\/(opencode\.json|checks\.sh)/)) return `The Tellico client install is incomplete: ${UPDATE}.`;
+  const bad = line(/unknown TELLICO_WEBSEARCH|must be (0 or 1|a positive number|tunnel or gateway)|unknown thinking level/);
+  if (bad) return `opencode-tellico rejected a setting: ${bad}`;
+  return `opencode-tellico exited before it was ready (code ${code}).\n${tail.trim().split("\n").slice(-6).join("\n")}`;
 }
 
 export function resolveLauncher(setting: string): string | undefined {

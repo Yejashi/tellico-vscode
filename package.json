@@ -218,8 +218,8 @@
         },
         "tellico.backgroundSubagents": {
           "type": "boolean",
-          "default": true,
-          "description": "Dispatch workers in the background (TELLICO_BACKGROUND_SUBAGENTS). Turn off if worker reports go missing."
+          "default": false,
+          "description": "Dispatch workers in the background (TELLICO_BACKGROUND_SUBAGENTS=1). Off, like the launcher: the lead waits for each worker's report, which the model tracks far more reliably."
         },
         "tellico.attachActiveEditor": {
           "type": "boolean",

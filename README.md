@@ -75,7 +75,7 @@ Open a folder, click the Tellico icon in the activity bar, and type.
 | `tellico.defaultMode` | `build` | `orchestrate` lets the lead delegate to the two workers. |
 | `tellico.defaultThink` | `medium` | Starting thinking level for new sessions. |
 | `tellico.magicContext` | `true` | Off = `--no-magic-context`. |
-| `tellico.backgroundSubagents` | `true` | Off if worker reports go missing. |
+| `tellico.backgroundSubagents` | `false` | Dispatch workers in the background. Off by default, like the launcher. |
 | `tellico.attachActiveEditor` | `true` | Attach the active file to each message. |
 | `tellico.showReasoning` | `false` | Expand reasoning blocks by default. |
 | `tellico.smoothStreaming` | `true` | Pace streamed text steadily instead of showing token clusters as they land. |

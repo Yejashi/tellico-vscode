@@ -41,6 +41,11 @@ export interface ToolBlock {
   error?: string;
   /** Child session started by a task/subagent tool, when known. */
   childSessionID?: string;
+  /** MCP calls made from a Code Mode `execute` tool, as `<server>.<tool>`. */
+  calls?: { tool: string; status: string }[];
+  /** Epoch ms the call started and ended, for "ran for Ns". */
+  started?: number;
+  ended?: number;
 }
 
 export type Block = ReasoningBlock | TextBlock | ToolBlock;
@@ -49,6 +54,7 @@ export interface UserMessage {
   kind: "user";
   id: string;
   text: string;
+  /** Names of attached files and images. */
   files?: string[];
   created: number;
 }
@@ -87,12 +93,49 @@ export interface AssistantMessage {
 export interface NoticeMessage {
   kind: "notice";
   id: string;
-  level: "info" | "error";
+  /** warn: a guard plugin stepped in (loop guard, stall nudge). */
+  level: "info" | "warn" | "error";
   text: string;
   created: number;
 }
 
-export type Message = UserMessage | AssistantMessage | NoticeMessage;
+/** A command the user ran with `!`, outside any model turn. */
+export interface ShellMessage {
+  kind: "shell";
+  id: string;
+  command: string;
+  status: "running" | "exited" | "timeout" | "killed";
+  exit?: number;
+  output?: string;
+  created: number;
+}
+
+/** Where OpenCode or Magic Context summarised the conversation so far. */
+export interface CompactionMessage {
+  kind: "compaction";
+  id: string;
+  status: "running" | "completed" | "failed";
+  reason?: string;
+  summary?: string;
+  created: number;
+}
+
+export type Message = UserMessage | AssistantMessage | NoticeMessage | ShellMessage | CompactionMessage;
+
+/** A prompt queued behind the running turn: not part of the transcript until delivered. */
+export interface PendingInput {
+  id: string;
+  text: string;
+  delivery: "steer" | "queue";
+  created: number;
+}
+
+/** A staged rewind: the transcript from `messageID` on is set aside and its files restored. */
+export interface RevertState {
+  messageID: string;
+  /** Files the rewind restored, workspace-relative. */
+  files: string[];
+}
 
 export interface PermissionRequest {
   id: string;
@@ -139,6 +182,17 @@ export interface SessionView {
   forms: FormQuestion[];
   children: ChildSession[];
   usage?: Usage;
+  /** Spend reported by the server, in USD; zero on the cluster. */
+  cost?: number;
+  /** Prompts waiting behind the running turn. */
+  pending: PendingInput[];
+  revert?: RevertState;
+  /** A provider retry is scheduled: shown as a countdown until the next step. */
+  retry?: { attempt: number; at: number; message: string };
+  /** Set while a compaction runs. */
+  compacting?: string;
+  /** Free-form session metadata; `pinned` is the only key the UI uses. */
+  pinned?: boolean;
   /** Files touched by edit tools this session (absolute paths). */
   changedFiles: string[];
   /** Line counts per changed file, from the server's diff when known. */
@@ -156,6 +210,7 @@ export function emptySession(id: string): SessionView {
     forms: [],
     children: [],
     changedFiles: [],
+    pending: [],
     lastSeq: 0,
   };
 }
@@ -169,6 +224,16 @@ export function parseTellicoAgent(agent: string | undefined): { mode: Mode; node
   const m = /^(build|orchestrate)-tellico-([01])$/.exec(agent ?? "");
   if (!m) return undefined;
   return { mode: m[1] as Mode, node: Number(m[2]) as 0 | 1 };
+}
+
+/**
+ * Tellico's guard plugins speak to the model as the user: loop-guard and the
+ * stall nudge prefix their prompts like this. They read as notices, not as
+ * something the user typed.
+ */
+export function guardNote(text: string): string | undefined {
+  const m = /^\(Tellico(?: loop guard)?\)\s*/.exec(text);
+  return m ? text : undefined;
 }
 
 /**

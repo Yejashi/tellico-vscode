@@ -8,11 +8,13 @@ import {
   ChildSession,
   emptySession,
   FormQuestion,
+  guardNote,
   Message,
   ModelRef,
   PermissionRequest,
   ReasoningBlock,
   SessionStatus,
+  ShellMessage,
   TextBlock,
   SessionView,
   StepTokens,
@@ -82,14 +84,23 @@ export class Store {
         if (sid) this.sessions.delete(sid);
         return sid ? [sid] : [];
       }
+      case "session.metadata.updated": {
+        const s = this.get(sid!);
+        s.pinned = Boolean(d.metadata?.pinned);
+        return [s.id];
+      }
       case "session.inbox.enqueued": {
         const s = this.get(sid!);
         const item = d.item ?? {};
         if (item.type === "user" && typeof item.payload?.text === "string") {
-          // The prompt call already added an optimistic copy; replace it.
           const id = d.inboxID as string;
+          // A queued prompt waits behind the turn; it joins the transcript when delivered.
+          if (item.delivery === "queue") {
+            s.pending = s.pending.filter((p) => p.id !== id).concat({ id, text: item.payload.text, delivery: "queue", created: now });
+            return [s.id];
+          }
           s.messages = s.messages.filter((m) => !(m.kind === "user" && m.id === id));
-          s.messages.push({ kind: "user", id, text: item.payload.text, created: now });
+          s.messages.push(userMessage(id, item.payload, now));
         } else if (item.type === "synthetic" && item.payload?.metadata?.source === "subagent") {
           const md = item.payload.metadata;
           s.messages.push({
@@ -103,28 +114,91 @@ export class Store {
         }
         return [s.id];
       }
+      case "session.inbox.delivered": {
+        const s = this.get(sid!);
+        const p = s.pending.find((x) => x.id === d.inboxID);
+        if (!p) return [];
+        s.pending = s.pending.filter((x) => x !== p);
+        if (!s.messages.some((m) => m.id === p.id)) s.messages.push(userMessage(p.id, { text: p.text }, now));
+        return [s.id];
+      }
+      case "session.inbox.cancelled": {
+        const s = this.get(sid!);
+        const before = s.pending.length;
+        s.pending = s.pending.filter((x) => x.id !== d.inboxID);
+        return s.pending.length !== before ? [s.id] : [];
+      }
+      case "session.inbox.delivery.changed": {
+        const s = this.get(sid!);
+        const p = s.pending.find((x) => x.id === d.inboxID);
+        if (!p) return [];
+        p.delivery = d.delivery === "steer" ? "steer" : "queue";
+        return [s.id];
+      }
+      case "session.revert.staged": {
+        const s = this.get(sid!);
+        const r = d.revert ?? {};
+        if (typeof r.messageID === "string") s.revert = { messageID: r.messageID, files: (r.files ?? []).map((f: any) => String(f.file)) };
+        return [s.id];
+      }
+      case "session.revert.cleared": {
+        const s = this.get(sid!);
+        s.revert = undefined;
+        return [s.id];
+      }
+      case "session.revert.committed": {
+        const s = this.get(sid!);
+        const at = s.messages.findIndex((m) => m.id === (d.to ?? s.revert?.messageID));
+        if (at >= 0) s.messages = s.messages.slice(0, at);
+        s.revert = undefined;
+        return [s.id];
+      }
+      case "session.compaction.started": {
+        const s = this.get(sid!);
+        s.compacting = d.reason ?? "auto";
+        return [s.id];
+      }
+      case "session.compaction.ended":
+      case "session.compaction.failed": {
+        const s = this.get(sid!);
+        s.compacting = undefined;
+        const failed = ev.type === "session.compaction.failed";
+        s.messages.push({ kind: "compaction", id: `compaction-${now}`, status: failed ? "failed" : "completed", reason: d.reason, summary: failed ? errorText(d) : d.text, created: now });
+        return [s.id];
+      }
+      case "session.shell.started":
+      case "session.shell.ended": {
+        const s = this.get(sid!);
+        const sh = d.shell ?? {};
+        const id = String(sh.id ?? `shell-${now}`);
+        const existing = s.messages.find((m) => m.kind === "shell" && m.id === id);
+        const msg = shellMessage(id, sh, d.output, now);
+        if (existing) Object.assign(existing, msg, { created: existing.created });
+        else s.messages.push(msg);
+        return [s.id];
+      }
       case "session.execution.started":
         return setStatus(this, sid!, "busy");
       case "session.execution.succeeded":
-      case "session.idle":
         return setStatus(this, sid!, "idle", true);
       case "session.execution.interrupted": {
         const ids = setStatus(this, sid!, "idle", true);
-        notice(this.get(sid!), "info", "Interrupted.", now);
+        notice(this.get(sid!), "info", interruptText(d.reason), now);
         return ids;
       }
-      case "session.execution.failed":
-      case "session.error": {
+      case "session.execution.failed": {
         const ids = setStatus(this, sid!, "error", true);
         notice(this.get(sid!), "error", errorText(d), now);
         return ids;
       }
       case "session.retry.scheduled": {
-        notice(this.get(sid!), "info", `Retrying: ${errorText(d)}`, now);
-        return [sid!];
+        const s = this.get(sid!);
+        s.retry = { attempt: Number(d.attempt ?? 1), at: Number(d.at ?? now), message: errorText(d) };
+        return [s.id];
       }
       case "session.step.started": {
         const s = this.get(sid!);
+        s.retry = undefined;
         const msg = assistant(s, d.assistantMessageID, now);
         msg.agent = d.agent ?? msg.agent;
         msg.model = d.model ?? msg.model;
@@ -150,6 +224,8 @@ export class Store {
       }
       case "session.step.failed": {
         const s = this.get(sid!);
+        // An interrupt fails the running step too; execution.interrupted says so once.
+        if (d.error?.type === "aborted") return [];
         notice(s, "error", errorText(d), now);
         return [s.id];
       }
@@ -181,7 +257,8 @@ export class Store {
       }
       case "session.tool.input.started": {
         const s = this.get(sid!);
-        tool(assistant(s, d.assistantMessageID, now), d.id, d.name);
+        const t = tool(assistant(s, d.assistantMessageID, now), d.id, d.name);
+        t.started ??= now;
         return [s.id];
       }
       case "session.tool.called": {
@@ -189,6 +266,14 @@ export class Store {
         const t = tool(assistant(s, d.assistantMessageID, now), d.id);
         t.status = "running";
         t.input = d.input ?? t.input;
+        t.started ??= now;
+        return [s.id];
+      }
+      case "session.tool.progress": {
+        const s = this.get(sid!);
+        const calls = toolCalls(d.metadata);
+        if (!calls) return [];
+        tool(assistant(s, d.assistantMessageID, now), d.id).calls = calls;
         return [s.id];
       }
       case "session.tool.success": {
@@ -196,6 +281,8 @@ export class Store {
         const t = tool(assistant(s, d.assistantMessageID, now), d.id);
         t.status = "completed";
         t.output = contentText(d.content);
+        t.ended = now;
+        t.calls = toolCalls(d.metadata) ?? t.calls;
         const child = d.metadata?.sessionID;
         if (typeof child === "string" && child !== s.id) t.childSessionID = child;
         trackEdit(s, t);
@@ -209,11 +296,14 @@ export class Store {
         const t = tool(assistant(s, d.assistantMessageID, now), d.id);
         t.status = "error";
         t.error = errorText(d);
+        t.ended = now;
+        t.calls = toolCalls(d.metadata) ?? t.calls;
         return [s.id];
       }
       case "session.usage.updated": {
         const s = this.get(sid!);
         s.usage = toTokens(d.tokens);
+        if (typeof d.cost === "number") s.cost = d.cost;
         return [s.id];
       }
       case "permission.asked": {
@@ -269,11 +359,20 @@ export class Store {
     s.agent = info.agent ?? s.agent;
     s.model = info.model ?? s.model;
     s.parentID = info.parentID ?? s.parentID;
+    s.cost = typeof info.cost === "number" ? info.cost : s.cost;
+    s.pinned = Boolean(info.metadata?.pinned);
+    s.revert = info.revert?.messageID ? { messageID: info.revert.messageID, files: (info.revert.files ?? []).map((f: any) => String(f.file)) } : undefined;
     const messages: Message[] = [];
     for (const m of [...items].reverse()) {
       const created = m.time?.created ?? 0;
       if (m.type === "user") {
-        messages.push({ kind: "user", id: m.id, text: m.text ?? m.payload?.text ?? "", created });
+        messages.push(userMessage(m.id, { text: m.text ?? m.payload?.text ?? "", files: m.files }, created));
+      } else if (m.type === "shell") {
+        messages.push(shellMessage(m.id, m, m.output, created));
+      } else if (m.type === "compaction") {
+        messages.push({ kind: "compaction", id: m.id, status: m.status === "failed" ? "failed" : m.status === "running" ? "running" : "completed", reason: m.reason, summary: m.summary, created });
+      } else if (m.type === "idle" && m.outcome === "interrupted") {
+        messages.push({ kind: "notice", id: m.id, level: "info", text: interruptText(m.metadata?.reason), created });
       } else if (m.type === "assistant") {
         const blocks: Block[] = [];
         for (const c of m.content ?? []) {
@@ -291,6 +390,7 @@ export class Store {
               input: st.input,
               output: contentText(st.content),
               error: st.status === "error" ? errorText(st) : undefined,
+              ...(toolCalls(st.metadata) ? { calls: toolCalls(st.metadata) } : {}),
             };
             const child = st.metadata?.sessionID;
             if (typeof child === "string") t.childSessionID = child;
@@ -318,6 +418,14 @@ export class Store {
     s.messages = messages;
     return s;
   }
+
+  /** Undelivered prompts from GET .../inbox, which history does not include. */
+  loadInbox(id: string, items: any[]) {
+    const s = this.get(id);
+    s.pending = (items ?? [])
+      .filter((i) => i?.type === "user" && i.delivery === "queue" && typeof i.payload?.text === "string")
+      .map((i) => ({ id: String(i.id), text: i.payload.text, delivery: "queue" as const, created: i.time?.created ?? 0 }));
+  }
 }
 
 function withParent(store: Store, s: SessionView, fn?: (p: SessionView) => void): string[] {
@@ -331,6 +439,7 @@ function setStatus(store: Store, sid: string, status: SessionStatus, finish = fa
   const s = store.get(sid);
   s.status = status;
   if (finish) {
+    s.retry = undefined;
     for (const m of s.messages) {
       if (m.kind !== "assistant" || m.done) continue;
       m.done = true;
@@ -394,6 +503,38 @@ function trackEdit(s: SessionView, t: ToolBlock) {
   if (!EDIT_TOOLS.has(t.name) || t.status !== "completed") return;
   const p = (t.input?.path ?? t.input?.filePath ?? t.input?.file_path) as string | undefined;
   if (typeof p === "string" && !s.changedFiles.includes(p)) s.changedFiles.push(p);
+}
+
+/** A user prompt, or the guard plugin note it really is. */
+function userMessage(id: string, payload: { text: string; files?: any[] }, created: number): Message {
+  if (guardNote(payload.text)) return { kind: "notice", id, level: "warn", text: payload.text.replace(/^\(Tellico(?: loop guard)?\)\s*/, ""), created };
+  const files = (payload.files ?? []).map((f: any) => String(f?.name ?? f?.source?.uri ?? f?.uri ?? "")).filter(Boolean);
+  return { kind: "user", id, text: payload.text, ...(files.length ? { files } : {}), created };
+}
+
+function shellMessage(id: string, sh: any, output: any, created: number): ShellMessage {
+  const status = ["running", "exited", "timeout", "killed"].includes(sh?.status) ? sh.status : "running";
+  const exit = typeof sh?.exit === "number" ? sh.exit : undefined;
+  return { kind: "shell", id, command: String(sh?.command ?? ""), status, exit, output: typeof output?.output === "string" ? output.output : undefined, created };
+}
+
+function toolCalls(md: any): { tool: string; status: string }[] | undefined {
+  const calls = md?.toolCalls;
+  if (!Array.isArray(calls) || !calls.length) return undefined;
+  return calls.map((c: any) => ({ tool: String(c?.tool ?? "tool"), status: String(c?.status ?? "running") }));
+}
+
+function interruptText(reason: unknown): string {
+  switch (reason) {
+    case "shutdown":
+      return "Stopped: the server shut down.";
+    case "superseded":
+      return "Interrupted by a newer prompt.";
+    case "inactivity":
+      return "Stopped after a long stretch with no progress.";
+    default:
+      return "Interrupted.";
+  }
 }
 
 function toTokens(t: any): StepTokens {

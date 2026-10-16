@@ -148,3 +148,121 @@ describe("helpers", () => {
     expect(stripMarkers("no marker §1§ inside")).toBe("no marker §1§ inside");
   });
 });
+
+describe("inbox: queue and steer", () => {
+  const enqueue = (delivery: "steer" | "queue", id = "msg_q1") => ({
+    type: "session.inbox.enqueued",
+    data: { sessionID: "ses_a", inboxID: id, item: { type: "user", payload: { text: "and then add tests" }, delivery } },
+  });
+
+  it("keeps a queued prompt out of the transcript until it is delivered", () => {
+    const store = new Store();
+    store.apply(enqueue("queue"));
+    const s = store.get("ses_a");
+    expect(s.pending).toEqual([expect.objectContaining({ id: "msg_q1", delivery: "queue" })]);
+    expect(s.messages).toHaveLength(0);
+    store.apply({ type: "session.inbox.delivered", data: { sessionID: "ses_a", inboxID: "msg_q1" } });
+    expect(s.pending).toHaveLength(0);
+    expect(s.messages).toEqual([expect.objectContaining({ kind: "user", id: "msg_q1", text: "and then add tests" })]);
+  });
+
+  it("drops a cancelled prompt and tracks a switch to steer", () => {
+    const store = new Store();
+    store.apply(enqueue("queue", "msg_a"));
+    store.apply(enqueue("queue", "msg_b"));
+    store.apply({ type: "session.inbox.delivery.changed", data: { sessionID: "ses_a", inboxID: "msg_b", delivery: "steer" } });
+    store.apply({ type: "session.inbox.cancelled", data: { sessionID: "ses_a", inboxID: "msg_a" } });
+    expect(store.get("ses_a").pending).toEqual([expect.objectContaining({ id: "msg_b", delivery: "steer" })]);
+  });
+
+  it("shows a steered prompt at once", () => {
+    const store = new Store();
+    store.apply(enqueue("steer"));
+    expect(store.get("ses_a").messages.map((m) => m.kind)).toEqual(["user"]);
+  });
+
+  it("loads only undelivered queued prompts from the inbox route", () => {
+    const store = new Store();
+    store.loadInbox("ses_a", [
+      { id: "msg_1", type: "user", delivery: "queue", payload: { text: "later" }, time: { created: 1 } },
+      { id: "msg_2", type: "synthetic", delivery: "queue", payload: { text: "x" } },
+    ]);
+    expect(store.get("ses_a").pending.map((p) => p.id)).toEqual(["msg_1"]);
+  });
+});
+
+describe("guard plugin notes", () => {
+  it("renders loop-guard and stall prompts as warnings, not user bubbles", () => {
+    const store = new Store();
+    const text = "(Tellico loop guard) Your last reply began repeating the same paragraph.";
+    store.apply({ type: "session.inbox.enqueued", data: { sessionID: "ses_a", inboxID: "msg_g", item: { type: "user", payload: { text }, delivery: "steer" } } });
+    const h = new Store().loadHistory({ id: "ses_b" }, [{ id: "msg_h", type: "user", text: '(Tellico) Your last reply ended with "Next I will run the tests" but made no tool call.', time: { created: 1 } }]);
+    expect(store.get("ses_a").messages[0]).toMatchObject({ kind: "notice", level: "warn", text: "Your last reply began repeating the same paragraph." });
+    expect(h.messages[0]).toMatchObject({ kind: "notice", level: "warn" });
+  });
+});
+
+describe("interrupts, retries, revert, shell, compaction", () => {
+  it("reports an interrupt once, with its reason", () => {
+    const events = load("guard-and-interrupt.events.json");
+    const s = replay(events).get(rootOf(events));
+    expect(s.messages.filter((m) => m.kind === "notice").map((m) => (m as any).text)).toEqual(["Interrupted."]);
+    const store = new Store();
+    store.apply({ type: "session.execution.interrupted", data: { sessionID: "ses_a", reason: "inactivity" } });
+    expect(store.get("ses_a").messages[0]).toMatchObject({ text: "Stopped after a long stretch with no progress." });
+  });
+
+  it("holds a retry as state until the next step starts", () => {
+    const store = new Store();
+    store.apply({ type: "session.retry.scheduled", data: { sessionID: "ses_a", attempt: 2, at: 5000, error: { type: "provider.transport", message: "The cluster is busy" } } });
+    expect(store.get("ses_a").retry).toEqual({ attempt: 2, at: 5000, message: "The cluster is busy" });
+    expect(store.get("ses_a").messages).toHaveLength(0);
+    store.apply({ type: "session.step.started", data: { sessionID: "ses_a", assistantMessageID: "msg_x" } });
+    expect(store.get("ses_a").retry).toBeUndefined();
+  });
+
+  it("stages, clears and commits a rewind", () => {
+    const events = load("fix-and-run.events.json");
+    const store = replay(events);
+    const id = rootOf(events);
+    const s = store.get(id);
+    const user = s.messages[0].id;
+    store.apply({ type: "session.revert.staged", data: { sessionID: id, revert: { messageID: user, files: [{ file: "calc.py" }] } } });
+    expect(s.revert).toEqual({ messageID: user, files: ["calc.py"] });
+    store.apply({ type: "session.revert.cleared", data: { sessionID: id } });
+    expect(s.revert).toBeUndefined();
+    store.apply({ type: "session.revert.staged", data: { sessionID: id, revert: { messageID: user } } });
+    store.apply({ type: "session.revert.committed", data: { sessionID: id, to: user } });
+    expect(s.messages).toHaveLength(0);
+    expect(s.revert).toBeUndefined();
+  });
+
+  it("builds a shell message from live events and from history alike", () => {
+    const store = new Store();
+    const shell = { id: "sh_1", command: "git status", status: "running" };
+    store.apply({ type: "session.shell.started", data: { sessionID: "ses_a", shell } });
+    store.apply({ type: "session.shell.ended", data: { sessionID: "ses_a", shell: { ...shell, status: "exited", exit: 0 }, output: { output: "clean\n" } } });
+    const live = store.get("ses_a").messages;
+    const h = new Store().loadHistory({ id: "ses_b" }, [{ id: "sh_1", type: "shell", shellID: "sh_1", command: "git status", status: "exited", exit: 0, output: { output: "clean\n" }, time: { created: 1 } }]);
+    expect(live).toHaveLength(1);
+    expect({ ...live[0], created: 0 }).toEqual({ ...h.messages[0], created: 0 });
+  });
+
+  it("marks compaction while it runs and leaves a divider after", () => {
+    const store = new Store();
+    store.apply({ type: "session.compaction.started", data: { sessionID: "ses_a", reason: "manual" } });
+    expect(store.get("ses_a").compacting).toBe("manual");
+    store.apply({ type: "session.compaction.ended", data: { sessionID: "ses_a", reason: "manual", text: "summary" } });
+    expect(store.get("ses_a").compacting).toBeUndefined();
+    expect(store.get("ses_a").messages[0]).toMatchObject({ kind: "compaction", status: "completed", summary: "summary" });
+  });
+
+  it("collects Code Mode MCP calls on the execute tool", () => {
+    const store = new Store();
+    const base = { sessionID: "ses_a", assistantMessageID: "msg_1", id: "t1" };
+    store.apply({ type: "session.tool.input.started", data: { ...base, name: "execute" } });
+    store.apply({ type: "session.tool.progress", data: { ...base, metadata: { toolCalls: [{ tool: "github.search_issues", status: "running" }] } } });
+    const t = (store.get("ses_a").messages[0] as AssistantMessage).blocks[0] as ToolBlock;
+    expect(t.calls).toEqual([{ tool: "github.search_issues", status: "running" }]);
+  });
+});

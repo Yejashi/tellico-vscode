@@ -143,7 +143,7 @@ export class Controller implements vscode.Disposable {
       gatewayUrl: c.get<string>("gatewayUrl", ""),
       leadNode: c.get("leadNode", "auto") as LaunchSettings["leadNode"],
       magicContext: c.get("magicContext", true),
-      backgroundSubagents: c.get("backgroundSubagents", true),
+      backgroundSubagents: c.get("backgroundSubagents", false),
     };
   }
 
@@ -184,7 +184,7 @@ export class Controller implements vscode.Disposable {
         for (const id of this.store.apply(ev)) this.markDirty(id);
         // When a turn ends, take the authoritative changed-file list from the
         // server: it includes workers' edits and files changed by shell commands.
-        if (ev.type === "session.execution.succeeded" || ev.type === "session.execution.interrupted") {
+        if (/^session\.execution\.(succeeded|interrupted|failed)$/.test(ev.type) || ev.type === "session.revert.staged" || ev.type === "session.revert.cleared") {
           const sid = ev.data?.sessionID as string | undefined;
           const root = sid ? this.store.sessions.get(sid) : undefined;
           const lead = root?.parentID ?? root?.id;
@@ -351,7 +351,7 @@ export class Controller implements vscode.Disposable {
     const s = this.store.get(id);
     const stats: Record<string, { additions: number; deletions: number }> = {};
     for (const sid of [s.id, ...s.children.map((c) => c.id)]) {
-      for (const d of await api.diff(sid).catch(() => [])) {
+      for (const d of await api.diff(sid, this.sessionRange(sid)).catch(() => [])) {
         if (d.patch) stats[this.resolvePath(d.file).fsPath] = { additions: d.additions, deletions: d.deletions };
       }
     }
@@ -362,12 +362,22 @@ export class Controller implements vscode.Disposable {
     this.markDirty(id);
   }
 
+  /**
+   * The whole session as a diff range: the server's default is only the
+   * newest turn, which would drop files edited earlier from the list.
+   */
+  private sessionRange(id: string): { from?: string; to?: string } {
+    const users = this.store.get(id).messages.filter((m) => m.kind === "user");
+    return { from: users[0]?.id, to: users[users.length - 1]?.id };
+  }
+
   private async loadSession(id: string): Promise<SessionView> {
     const api = this.api!;
-    const [info, items] = await Promise.all([api.session(id), api.messages(id)]);
+    const [info, items, inbox] = await Promise.all([api.sessionRaw(id), api.messages(id), api.inbox(id).catch(() => [])]);
     const s = this.store.loadHistory(info, items);
+    this.store.loadInbox(id, inbox);
     // Child sessions are listed by parent; refresh their titles/status.
-    const children = await fetchChildren(api, id).catch(() => []);
+    const children = await api.children(id).catch(() => []);
     for (const c of children) {
       const existing = s.children.find((x) => x.id === c.id);
       if (existing) existing.title = c.title;
@@ -655,7 +665,7 @@ export class Controller implements vscode.Disposable {
     const session = this.store.get(view.sessionID);
     let d;
     for (const id of [session.id, ...session.children.map((c) => c.id)]) {
-      const diffs = await this.api.diff(id).catch(() => []);
+      const diffs = await this.api.diff(id, this.sessionRange(id)).catch(() => []);
       d = diffs.find((x) => x.file === rel || this.resolvePath(x.file).fsPath === uri.fsPath);
       if (d) break;
     }
@@ -710,14 +720,6 @@ function reverseDeleted(patch: string): string {
     .filter((l) => l.startsWith("-") && !l.startsWith("---"))
     .map((l) => l.slice(1))
     .join("\n");
-}
-
-async function fetchChildren(api: Api, parentID: string) {
-  const url = api.url("/api/session", { parentID, limit: "50" });
-  const res = await fetch(url, { headers: { Authorization: api.auth } });
-  if (!res.ok) return [];
-  const json: any = await res.json();
-  return (json.data ?? []).map((s: any) => ({ id: s.id as string, title: (s.title ?? "Subagent") as string, agent: s.agent as string | undefined }));
 }
 
 export { BEFORE_SCHEME };

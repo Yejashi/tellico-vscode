@@ -38,6 +38,43 @@ export interface SessionInfo {
   updated: number;
 }
 
+export interface PromptFile {
+  /** file:// (optionally ?start=&end= for 1-based lines) or data: URI. */
+  uri: string;
+  name?: string;
+  /** The span of the prompt text that refers to this file, e.g. "@src/a.ts". */
+  mention?: { start: number; end: number; text: string };
+}
+
+export type Delivery = "steer" | "queue";
+
+export interface McpServer {
+  name: string;
+  status: "connected" | "pending" | "disabled" | "failed" | "needs_auth";
+  error?: string;
+  /** Set for remote servers; OAuth goes through this integration. */
+  integrationID?: string;
+}
+
+export interface OAuthAttempt {
+  attemptID: string;
+  url: string;
+  instructions?: string;
+  mode: "auto" | "code";
+}
+
+export interface SavedPermission {
+  id: string;
+  action: string;
+  resource: string;
+  time: number;
+}
+
+export interface ModelLimits {
+  context: number;
+  output: number;
+}
+
 export interface FileDiff {
   file: string;
   patch: string;
@@ -51,6 +88,8 @@ export class ApiError extends Error {
     super(message);
   }
 }
+
+const CALL_TIMEOUT_MS = 60_000;
 
 export class Api {
   constructor(private readonly conn: Connection) {}
@@ -71,6 +110,9 @@ export class Api {
       method,
       headers: { Authorization: this.auth, ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      // Every call here answers at once (prompts are only enqueued); a hung
+      // server must not leave a button that does nothing.
+      signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
     });
     const text = await res.text();
     if (!res.ok) {
@@ -110,8 +152,42 @@ export class Api {
     return (list ?? []).map(toSessionInfo).filter((s) => !s.parentID);
   }
 
+  /** Server-side title search; most recent first, top-level only. */
+  async searchSessions(search: string, limit = 50): Promise<SessionInfo[]> {
+    const list = await this.call<any[]>("GET", "/api/session", undefined, { limit: String(limit), order: "desc", parentID: "null", search });
+    return (list ?? []).map(toSessionInfo).filter((s) => !s.parentID);
+  }
+
+  async children(parentID: string): Promise<SessionInfo[]> {
+    const list = await this.call<any[]>("GET", "/api/session", undefined, { parentID, limit: "50" });
+    return (list ?? []).map(toSessionInfo);
+  }
+
+  /** Ids of sessions with a running turn. */
+  async active(): Promise<string[]> {
+    return Object.keys((await this.call<Record<string, unknown>>("GET", "/api/session/active")) ?? {});
+  }
+
   async session(id: string): Promise<SessionInfo> {
     return toSessionInfo(await this.call<any>("GET", `/api/session/${id}`));
+  }
+
+  /** The raw Session.Info, for Store.loadHistory (revert, cost, metadata). */
+  sessionRaw(id: string): Promise<any> {
+    return this.call<any>("GET", `/api/session/${id}`);
+  }
+
+  rename(id: string, title: string): Promise<unknown> {
+    return this.call("PATCH", `/api/session/${id}`, { title });
+  }
+
+  setMetadata(id: string, metadata: Record<string, unknown>): Promise<unknown> {
+    return this.call("PATCH", `/api/session/${id}`, { metadata });
+  }
+
+  /** Marks the latest idle transition seen, so other clients drop their unread dot. */
+  view(id: string, idle: number): Promise<unknown> {
+    return this.call("POST", `/api/session/${id}/view`, { idle });
   }
 
   async createSession(agent: string, model: ModelRef): Promise<SessionInfo> {
@@ -138,16 +214,62 @@ export class Api {
     return out;
   }
 
-  prompt(id: string, text: string, files: { uri: string; name?: string }[] = []): Promise<unknown> {
-    return this.call("POST", `/api/session/${id}/prompt`, { text, files });
+  /**
+   * Admits a prompt. `steer` (the server default) joins the running turn at
+   * its next step; `queue` waits until the turn ends.
+   */
+  prompt(id: string, text: string, files: PromptFile[] = [], delivery?: Delivery): Promise<unknown> {
+    return this.call("POST", `/api/session/${id}/prompt`, { text, files, ...(delivery ? { delivery } : {}) });
   }
 
-  command(id: string, name: string, text: string): Promise<unknown> {
-    return this.call("POST", `/api/session/${id}/command`, { name, text });
+  command(id: string, name: string, text: string, delivery?: Delivery): Promise<unknown> {
+    return this.call("POST", `/api/session/${id}/command`, { name, text, ...(delivery ? { delivery } : {}) });
   }
 
   interrupt(id: string): Promise<unknown> {
     return this.call("POST", `/api/session/${id}/interrupt`, {});
+  }
+
+  /** Runs a shell command in the session's directory, with no model turn. */
+  shell(id: string, command: string): Promise<unknown> {
+    return this.call("POST", `/api/session/${id}/shell`, { command });
+  }
+
+  compact(id: string): Promise<unknown> {
+    return this.call("POST", `/api/session/${id}/compact`, {});
+  }
+
+  /** Pending inbox items (prompts not yet delivered). */
+  inbox(id: string): Promise<any[]> {
+    return this.call<any[]>("GET", `/api/session/${id}/inbox`).then((l) => l ?? []);
+  }
+
+  cancelInbox(id: string, inboxID: string): Promise<unknown> {
+    return this.call("DELETE", `/api/session/${id}/inbox/${inboxID}`);
+  }
+
+  /** Moves a queued prompt into the running turn. */
+  steerInbox(id: string, inboxID: string): Promise<unknown> {
+    return this.call("PATCH", `/api/session/${id}/inbox/${inboxID}`, { delivery: "steer" });
+  }
+
+  /**
+   * Sets the transcript aside from `messageID` on and, with `files`, restores
+   * the files those steps changed. Staged until cleared or committed; the next
+   * prompt commits it.
+   */
+  revertStage(id: string, messageID: string, files = true): Promise<{ files: string[] }> {
+    return this.call<any>("POST", `/api/session/${id}/revert/stage`, { messageID, files }).then((r) => ({
+      files: (r?.files ?? []).map((f: any) => String(f.file)),
+    }));
+  }
+
+  revertClear(id: string): Promise<unknown> {
+    return this.call("DELETE", `/api/session/${id}/revert`);
+  }
+
+  revertCommit(id: string): Promise<unknown> {
+    return this.call("POST", `/api/session/${id}/revert/commit`);
   }
 
   switchAgent(id: string, agent: string): Promise<unknown> {
@@ -187,9 +309,86 @@ export class Api {
     return this.call("DELETE", `/api/session/${id}`);
   }
 
-  /** Unified patches for every file the session changed. */
-  async diff(id: string): Promise<FileDiff[]> {
-    return (await this.call<FileDiff[]>("GET", `/api/session/${id}/diff`)) ?? [];
+  /**
+   * Unified patches for the files changed between the turns of user messages
+   * `from` and `to` (inclusive). With neither, only the newest turn: pass the
+   * first and last user message for the whole session.
+   */
+  async diff(id: string, range: { from?: string; to?: string } = {}): Promise<FileDiff[]> {
+    const q: Record<string, string> = {};
+    if (range.from) q.from = range.from;
+    if (range.to && range.to !== range.from) q.to = range.to;
+    return (await this.call<FileDiff[]>("GET", `/api/session/${id}/diff`, undefined, q)) ?? [];
+  }
+
+  /** Fuzzy file search in the workspace, for @-mentions. */
+  async findFiles(query: string, limit = 12): Promise<{ path: string; type: "file" | "directory" }[]> {
+    const list = await this.call<any[]>("GET", "/api/fs/find", undefined, { query, limit: String(limit) });
+    return (list ?? []).map((f) => ({ path: String(f.path), type: f.type === "directory" ? "directory" : "file" }));
+  }
+
+  async vcs(): Promise<{ branch?: string } | undefined> {
+    const v = await this.call<any>("GET", "/api/vcs").catch(() => undefined);
+    return v ? { branch: v.branch?.current ?? undefined } : undefined;
+  }
+
+  // ---------- MCP ----------
+
+  async mcp(): Promise<McpServer[]> {
+    const list = await this.call<any[]>("GET", "/api/mcp");
+    return (list ?? []).map((m) => ({
+      name: String(m.name),
+      status: m.status?.status ?? m.status ?? "pending",
+      error: m.status?.error ?? undefined,
+      integrationID: m.integrationID ?? undefined,
+    }));
+  }
+
+  /** Adds or replaces a server for this server's lifetime; connects at once. */
+  addMcp(name: string, config: Record<string, unknown>): Promise<unknown> {
+    return this.call("PUT", `/api/experimental/mcp/${encodeURIComponent(name)}`, { config });
+  }
+
+  removeMcp(name: string): Promise<unknown> {
+    return this.call("DELETE", `/api/experimental/mcp/${encodeURIComponent(name)}`);
+  }
+
+  connectMcp(name: string): Promise<unknown> {
+    return this.call("POST", `/api/experimental/mcp/${encodeURIComponent(name)}/connect`);
+  }
+
+  disconnectMcp(name: string): Promise<unknown> {
+    return this.call("POST", `/api/experimental/mcp/${encodeURIComponent(name)}/disconnect`);
+  }
+
+  /** Starts an MCP server's OAuth sign-in. Returns only the attempt, never credentials. */
+  async startOAuth(integrationID: string): Promise<OAuthAttempt | undefined> {
+    const info = await this.call<any>("GET", `/api/integration/${integrationID}`);
+    const method = (info?.methods ?? []).find((m: any) => m.type === "oauth");
+    if (!method) return undefined;
+    const a = await this.call<any>("POST", `/api/integration/${integrationID}/connect/oauth`, { methodID: method.id });
+    return { attemptID: String(a.attemptID), url: String(a.url), instructions: a.instructions ?? undefined, mode: a.mode === "code" ? "code" : "auto" };
+  }
+
+  async oauthStatus(integrationID: string, attemptID: string): Promise<string> {
+    const r = await this.call<any>("GET", `/api/integration/${integrationID}/connect/oauth/${attemptID}`);
+    return String(r?.status ?? "pending");
+  }
+
+  completeOAuth(integrationID: string, attemptID: string, code: string): Promise<unknown> {
+    return this.call("POST", `/api/integration/${integrationID}/connect/oauth/${attemptID}/complete`, { code });
+  }
+
+  // ---------- permissions ----------
+
+  /** "Always allow" grants this project has saved. */
+  async savedPermissions(): Promise<SavedPermission[]> {
+    const list = await this.call<any[]>("GET", "/api/permission/saved");
+    return (list ?? []).map((p) => ({ id: String(p.id), action: String(p.action), resource: String(p.resource), time: Number(p.time?.created ?? p.time ?? 0) }));
+  }
+
+  removeSavedPermission(id: string): Promise<unknown> {
+    return this.call("DELETE", `/api/permission/saved/${id}`);
   }
 
   /**
@@ -198,9 +397,23 @@ export class Api {
    * from it may leave this method.
    */
   async defaultNode(): Promise<0 | 1 | undefined> {
+    return (await this.defaultModel()).node;
+  }
+
+  /**
+   * The launcher's node choice and the model's token limits, read from the
+   * default model. Only these numbers leave this method: the same payload
+   * carries the API key.
+   */
+  async defaultModel(): Promise<{ node?: 0 | 1; limits?: ModelLimits }> {
     const m = await this.call<any>("GET", "/api/model/default");
     const match = /^tellico-([01])$/.exec(String(m?.providerID ?? ""));
-    return match ? (Number(match[1]) as 0 | 1) : undefined;
+    const context = Number(m?.limit?.context);
+    const output = Number(m?.limit?.output);
+    return {
+      node: match ? (Number(match[1]) as 0 | 1) : undefined,
+      limits: context > 0 ? { context, output: output > 0 ? output : 0 } : undefined,
+    };
   }
 
   async ready(): Promise<boolean> {

@@ -462,3 +462,19 @@ body.vscode-dark .shimmer { --tc-shimmer: #ffffffcc; background-color: color-mix
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* ---------- shell runs, compaction ---------- */
+.shell-run { margin: 6px 0; }
+.badge.err { background: color-mix(in srgb, var(--tc-err) 22%, transparent); color: var(--vscode-foreground); }
+.compaction { margin: 14px 0; }
+.compaction-line {
+  display: flex; align-items: center; gap: 8px; color: var(--tc-muted); font-size: 0.85em; cursor: default;
+}
+.compaction-line::before, .compaction-line::after { content: ""; flex: 1; height: 1px; background: var(--tc-hairline); }
+.compaction.failed .compaction-line { color: var(--vscode-errorForeground); }
+.compaction-summary {
+  margin-top: 6px; padding: 8px 10px; border-radius: 6px; background: var(--tc-fill); white-space: pre-wrap;
+  font-size: 0.9em; max-height: 320px; overflow-y: auto;
+}
+.event-warn { border-color: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 45%, transparent); }
+.event-warn .codicon { color: var(--vscode-editorWarning-foreground, #cca700); }
