@@ -11,6 +11,8 @@ export type NotifyWhen = "unfocused" | "always" | "off";
 export class Attention {
   private readonly wasBusy = new Set<string>();
   private readonly asked = new Set<string>();
+  /** Leads with a notification on screen: one at a time each, however many workers ask. */
+  private readonly showing = new Set<string>();
 
   constructor(
     private readonly setting: () => NotifyWhen,
@@ -53,10 +55,12 @@ export class Attention {
   }
 
   private needsInput(s: SessionView) {
-    if (!this.shouldNotify()) return;
     const lead = s.parentID ?? s.id;
-    void vscode.window
-      .showWarningMessage(`Tellico is waiting for you${s.parentID ? " (a worker)" : ""}: ${s.title}`, "Open")
-      .then((pick) => pick && this.open(lead));
+    if (!this.shouldNotify() || this.showing.has(lead)) return;
+    this.showing.add(lead);
+    void vscode.window.showWarningMessage(`Tellico is waiting for you${s.parentID ? " (a worker)" : ""}: ${s.title}`, "Open").then((pick) => {
+      this.showing.delete(lead);
+      if (pick) this.open(lead);
+    });
   }
 }

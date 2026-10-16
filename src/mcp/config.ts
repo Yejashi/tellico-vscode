@@ -389,3 +389,30 @@ function omit(o: Record<string, unknown>, key: string): Record<string, unknown> 
   const { [key]: _drop, ...rest } = o;
   return rest;
 }
+
+export function isHttpUrl(v: string): boolean {
+  try {
+    return /^https?:$/.test(new URL(v).protocol);
+  } catch {
+    return false;
+  }
+}
+
+/** A name for a server from its URL: "github" for mcp.github.com, the host for localhost or an IP. */
+export function hostLabel(url: string): string {
+  try {
+    const host = new URL(url).hostname;
+    if (/^[\d.]+$|^\[|^localhost$/.test(host)) return host === "localhost" ? "local" : "server";
+    const parts = host.split(".");
+    return (parts.length > 1 ? parts[parts.length - 2] : parts[0]) || "server";
+  } catch {
+    return "server";
+  }
+}
+
+/** Splits a command line on spaces, honouring simple quotes. */
+export function splitCommand(line: string): string[] {
+  const out: string[] = [];
+  for (const m of line.trim().matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)) out.push(m[1] ?? m[2] ?? m[3]);
+  return out;
+}

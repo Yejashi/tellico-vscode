@@ -435,3 +435,13 @@ describe("config locations", () => {
     );
   });
 });
+
+describe("server names from URLs", () => {
+  it("never throws and picks a readable name", async () => {
+    const { hostLabel } = await import("../src/mcp/config");
+    expect(hostLabel("https://mcp.github.com/mcp")).toBe("github");
+    expect(hostLabel("http://localhost:3000/mcp")).toBe("local");
+    expect(hostLabel("http://127.0.0.1:8080/mcp")).toBe("server");
+    expect(hostLabel("http://")).toBe("server");
+  });
+});

@@ -243,7 +243,7 @@ describe("interrupts, retries, revert, shell, compaction", () => {
     store.apply({ type: "session.shell.started", data: { sessionID: "ses_a", shell } });
     store.apply({ type: "session.shell.ended", data: { sessionID: "ses_a", shell: { ...shell, status: "exited", exit: 0 }, output: { output: "clean\n" } } });
     const live = store.get("ses_a").messages;
-    const h = new Store().loadHistory({ id: "ses_b" }, [{ id: "sh_1", type: "shell", shellID: "sh_1", command: "git status", status: "exited", exit: 0, output: { output: "clean\n" }, time: { created: 1 } }]);
+    const h = new Store().loadHistory({ id: "ses_b" }, [{ id: "msg_9", type: "shell", shellID: "sh_1", command: "git status", status: "exited", exit: 0, output: { output: "clean\n" }, time: { created: 1 } }]);
     expect(live).toHaveLength(1);
     expect({ ...live[0], created: 0 }).toEqual({ ...h.messages[0], created: 0 });
   });

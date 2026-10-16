@@ -94,11 +94,16 @@ export function terminalBlock(command: string | undefined, output: string, exit?
   return `\`\`\`console\n${command ? `$ ${command}\n` : ""}${clipped}\n\`\`\`${exit !== undefined && exit !== 0 ? `\n(exit code ${exit})` : ""}\n`;
 }
 
-/** The terminal's selection, read through the clipboard and put back after. */
+/**
+ * The terminal's selection, read through the clipboard (there is no stable
+ * API) and the clipboard's text put back after. The commands only offer this
+ * with text selected, so whatever the copy leaves is the selection.
+ */
 export async function terminalSelection(): Promise<string> {
   const saved = await vscode.env.clipboard.readText();
   await vscode.commands.executeCommand("workbench.action.terminal.copySelection");
   const text = await vscode.env.clipboard.readText();
-  await vscode.env.clipboard.writeText(saved);
-  return text === saved ? "" : text;
+  // An image or files on the clipboard read as "": nothing to restore.
+  if (saved) await vscode.env.clipboard.writeText(saved);
+  return text;
 }

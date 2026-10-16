@@ -7,7 +7,20 @@ import * as vscode from "vscode";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { globalConfigCandidates, ImportResult, McpServerEntry, parseVsCodeMcp, projectConfigCandidates, sanitizeName, upsertServer, vscodeUserMcpPaths } from "./config";
+import {
+  globalConfigCandidates,
+  hostLabel,
+  ImportResult,
+  isHttpUrl,
+  listServers,
+  McpServerEntry,
+  parseVsCodeMcp,
+  projectConfigCandidates,
+  sanitizeName,
+  splitCommand,
+  upsertServer,
+  vscodeUserMcpPaths,
+} from "./config";
 
 type Scope = "project" | "global";
 
@@ -57,10 +70,10 @@ export class McpManager {
       title: kind.value === "local" ? "Command line" : "Server URL",
       prompt: kind.value === "local" ? "Use {env:NAME} for secrets so they stay out of the file" : "OAuth sign-in, if the server needs it, starts from the MCP panel",
       ignoreFocusOut: true,
-      validateInput: (v) => (!v.trim() ? "Required" : kind.value === "remote" && !/^https?:\/\//.test(v.trim()) ? "Enter an http(s) URL" : undefined),
+      validateInput: (v) => (!v.trim() ? "Required" : kind.value === "remote" && !isHttpUrl(v.trim()) ? "Enter an http(s) URL" : undefined),
     });
     if (!target) return;
-    const suggested = kind.value === "remote" ? new URL(target.trim()).hostname.split(".").slice(-2, -1)[0] : (splitCommand(target).find((a) => !a.startsWith("-") && !/^(npx|uvx|node|python3?|bunx|docker|run)$/.test(a)) ?? "server");
+    const suggested = kind.value === "remote" ? hostLabel(target.trim()) : (splitCommand(target).find((a) => !a.startsWith("-") && !/^(npx|uvx|node|python3?|bunx|docker|run)$/.test(a)) ?? "server");
     const name = await vscode.window.showInputBox({
       title: "Server name",
       prompt: "Its tools are called <name>_<tool>",
@@ -112,6 +125,20 @@ export class McpManager {
     if (!chosen.length) return;
     const scope = await this.pickScope();
     if (!scope) return;
+    const target = this.configFile(scope);
+    const existing = new Set(target && existsSync(target) ? listServers(readFileSync(target, "utf8")).map((x) => x.name) : []);
+    const clash = chosen.filter((r) => existing.has(r.name)).map((r) => r.name);
+    if (clash.length) {
+      const pick = await vscode.window.showWarningMessage(
+        `${clash.join(", ")} ${clash.length > 1 ? "are" : "is"} already in ${target}.`,
+        { modal: true },
+        "Replace",
+        "Skip Those",
+      );
+      if (!pick) return;
+      if (pick === "Skip Those") chosen.splice(0, chosen.length, ...chosen.filter((r) => !existing.has(r.name)));
+      if (!chosen.length) return;
+    }
     const file = this.write(scope, chosen.map((r) => ({ name: r.name, entry: r.entry })));
     const problems = chosen.filter((r) => r.problems.length).map((r) => r.name);
     void vscode.window
@@ -136,11 +163,4 @@ export class McpManager {
   private async open(file: string) {
     await vscode.window.showTextDocument(vscode.Uri.file(file));
   }
-}
-
-/** Splits a command line on spaces, honouring simple quotes. */
-export function splitCommand(line: string): string[] {
-  const out: string[] = [];
-  for (const m of line.trim().matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)) out.push(m[1] ?? m[2] ?? m[3]);
-  return out;
 }

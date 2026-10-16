@@ -3,7 +3,6 @@
 // view (the sidebar and any editor tabs). Each view shows one session.
 
 import * as vscode from "vscode";
-import { existsSync } from "node:fs";
 import { AgentInfo, Api, Connection, Delivery } from "./server/api";
 import { EventStream } from "./server/events";
 import { LaunchSettings, ServerManager, ServerState } from "./server/manager";
@@ -13,7 +12,7 @@ import { Attachment, EditorContext, HostToWebview, McpServerView, Prefs, ServerS
 import { reversePatch } from "./diff/patch";
 import { ConnectionSetting, effectiveConnection, hasKey, installedMode, writeGatewayKey } from "./server/connection";
 import { BEFORE_SCHEME, BeforeContentProvider } from "./diff/beforeProvider";
-import { buildPromptFiles } from "./prompt";
+import { attachable, buildPromptFiles } from "./prompt";
 import { IDE_SERVER, IdeBridge } from "./ide/bridge";
 import { Attention, NotifyWhen } from "./attention";
 import { McpManager } from "./mcp/manage";
@@ -467,9 +466,12 @@ export class Controller implements vscode.Disposable {
 
   private async loadSession(id: string): Promise<SessionView> {
     const api = this.api!;
-    const [info, items, inbox] = await Promise.all([api.sessionRaw(id), api.messages(id), api.inbox(id).catch(() => [])]);
+    const [info, items, inbox, active] = await Promise.all([api.sessionRaw(id), api.messages(id), api.inbox(id).catch(() => []), api.active().catch(() => undefined)]);
     const s = this.store.loadHistory(info, items);
     this.store.loadInbox(id, inbox);
+    // History says nothing about whether a turn runs now; a turn may have
+    // started or ended while the event stream was down.
+    if (active) s.status = active.includes(id) ? "busy" : s.status === "busy" ? "idle" : s.status;
     // Child sessions are listed by parent; refresh their titles/status.
     const children = await api.children(id).catch(() => []);
     for (const c of children) {
@@ -707,7 +709,7 @@ export class Controller implements vscode.Disposable {
       const ed = vscode.window.activeTextEditor;
       if (ed && ed.document.uri.scheme === "file") active = { path: ed.document.uri.fsPath, range: this.context.selection };
     }
-    const files = buildPromptFiles({ text, root: this.directory ?? "/", attachments, active, exists: existsSync });
+    const files = buildPromptFiles({ text, root: this.directory ?? "/", attachments, active, exists: attachable });
     await this.api!.prompt(id, text, files, delivery);
   }
 
@@ -785,6 +787,8 @@ export class Controller implements vscode.Disposable {
     view.sessionID = id;
     view.sent = { length: 0 };
     const s = await this.loadSession(id);
+    // Another session was picked while this one loaded.
+    if (view.sessionID !== id) return;
     const parsed = parseTellicoAgent(s.agent);
     if (parsed && !s.parentID) {
       this.prefs.mode = parsed.mode;
@@ -904,7 +908,7 @@ export class Controller implements vscode.Disposable {
 
   private async sendSavedPermissions(view: ChatView) {
     if (!this.api) return;
-    const items = await this.api.savedPermissions().catch(() => []);
+    const items = await this.api.savedPermissions(await this.api.projectID().catch(() => undefined)).catch(() => []);
     view.post({ type: "savedPermissions", items: items.map((p) => ({ id: p.id, action: p.action, resource: p.resource })) });
   }
 

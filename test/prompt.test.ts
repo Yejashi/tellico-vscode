@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildPromptFiles, findMentions } from "../src/prompt";
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, truncateSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { attachable, buildPromptFiles, findMentions, MAX_ATTACHMENT } from "../src/prompt";
 
 describe("@-mentions", () => {
   it("finds paths, line ranges and their spans", () => {
@@ -14,6 +17,11 @@ describe("@-mentions", () => {
 
   it("ignores e-mail addresses and a lone @", () => {
     expect(findMentions("mail me@host.org or @ alone")).toEqual([]);
+  });
+
+  it("keeps escaped spaces inside a path", () => {
+    const ms = findMentions("see @my\\ dir/a\\ b.ts#L2 now");
+    expect(ms.map((m) => [m.path, m.range])).toEqual([["my dir/a b.ts", { start: 2, end: 2 }]]);
   });
 
   it("accepts a single line and an L on the end", () => {
@@ -45,5 +53,22 @@ describe("prompt files", () => {
       active: { path: "/work/proj/src/a.ts", range: { start: 5, end: 5 } },
     });
     expect(files.map((f) => f.name)).toEqual(["calc.py", "/elsewhere/n.txt", "shot.png", "src/a.ts#L5"]);
+  });
+});
+
+describe("attachable", () => {
+  it("takes directories and readable files under the cap, nothing else", () => {
+    const d = mkdtempSync(join(tmpdir(), "tellico-attach-"));
+    writeFileSync(join(d, "ok.txt"), "x");
+    writeFileSync(join(d, "big.log"), "");
+    truncateSync(join(d, "big.log"), MAX_ATTACHMENT + 1);
+    writeFileSync(join(d, "locked"), "x");
+    chmodSync(join(d, "locked"), 0o000);
+    mkdirSync(join(d, "sub"));
+    expect(attachable(join(d, "ok.txt"))).toBe(true);
+    expect(attachable(join(d, "sub"))).toBe(true);
+    expect(attachable(join(d, "big.log"))).toBe(false);
+    expect(attachable(join(d, "missing"))).toBe(false);
+    if (process.getuid?.() !== 0) expect(attachable(join(d, "locked"))).toBe(false);
   });
 });

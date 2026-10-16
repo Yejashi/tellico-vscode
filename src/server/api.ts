@@ -331,6 +331,12 @@ export class Api {
     return (list ?? []).map((f) => ({ path: String(f.path), type: f.type === "directory" ? "directory" : "file" }));
   }
 
+  /** The OpenCode project this directory belongs to. */
+  async projectID(): Promise<string | undefined> {
+    const loc = await this.call<any>("GET", "/api/location");
+    return loc?.project?.id ?? undefined;
+  }
+
   async vcs(): Promise<{ branch?: string } | undefined> {
     const v = await this.call<any>("GET", "/api/vcs").catch(() => undefined);
     return v ? { branch: v.branch?.current ?? undefined } : undefined;
@@ -391,8 +397,8 @@ export class Api {
   // ---------- permissions ----------
 
   /** "Always allow" grants this project has saved. */
-  async savedPermissions(): Promise<SavedPermission[]> {
-    const list = await this.call<any[]>("GET", "/api/permission/saved");
+  async savedPermissions(projectID?: string): Promise<SavedPermission[]> {
+    const list = await this.call<any[]>("GET", "/api/permission/saved", undefined, projectID ? { projectID } : {});
     return (list ?? []).map((p) => ({ id: String(p.id), action: String(p.action), resource: String(p.resource), time: Number(p.time?.created ?? p.time ?? 0) }));
   }
 

@@ -394,12 +394,12 @@ export function Transcript(props: { session: SessionMeta; messages: Message[]; s
   const busySince = useRef(0);
   if (busy && !busySince.current) busySince.current = Date.now();
   if (!busy) busySince.current = 0;
-  const toBottom = (smooth = false) => {
+  // Instant: a smooth scroll fires scroll events mid-way that would read as the user scrolling up.
+  const toBottom = () => {
     const el = ref.current;
     if (!el) return;
     ours.current = true;
-    if (smooth) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-    else el.scrollTop = el.scrollHeight;
+    el.scrollTop = el.scrollHeight;
   };
   useLayoutEffect(() => {
     if (stick.current) toBottom();
@@ -480,7 +480,7 @@ export function Transcript(props: { session: SessionMeta; messages: Message[]; s
           </div>
         </div>
         {detached && (
-          <button className="jump" onClick={() => ((stick.current = true), setDetached(false), toBottom(true))}>
+          <button className="jump" onClick={() => ((stick.current = true), setDetached(false), toBottom())}>
             <Icon name="arrow-down" /> {busy ? "Follow the latest" : "Jump to latest"}
           </button>
         )}

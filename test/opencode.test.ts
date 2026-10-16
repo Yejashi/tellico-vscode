@@ -95,7 +95,7 @@ describe.skipIf(!opencode)("plain opencode serve", () => {
     expect((shell as any).output).toContain("hello-from-shell");
     const history = new Store().loadHistory(await api.sessionRaw(id), await api.messages(id));
     const h = history.messages.find((m) => m.kind === "shell");
-    expect({ ...h, created: 0 }).toEqual({ ...shell, created: 0, id: h!.id });
+    expect({ ...h, created: 0 }).toEqual({ ...shell, created: 0 });
   }, 20_000);
 
   it("renames, pins and lists a session; inbox and active are readable", async () => {

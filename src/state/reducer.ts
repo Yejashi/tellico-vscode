@@ -368,7 +368,8 @@ export class Store {
       if (m.type === "user") {
         messages.push(userMessage(m.id, { text: m.text ?? m.payload?.text ?? "", files: m.files }, created));
       } else if (m.type === "shell") {
-        messages.push(shellMessage(m.id, m, m.output, created));
+        // Live events know the shell by its sh_ id only; use it here too.
+        messages.push(shellMessage(String(m.shellID ?? m.id), m, m.output, created));
       } else if (m.type === "compaction") {
         messages.push({ kind: "compaction", id: m.id, status: m.status === "failed" ? "failed" : m.status === "running" ? "running" : "completed", reason: m.reason, summary: m.summary, created });
       } else if (m.type === "idle" && m.outcome === "interrupted") {

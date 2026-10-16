@@ -48,9 +48,10 @@ function App() {
   }, [state.panel?.n]);
   useEffect(() => {
     setPanel((p) => (p === "history" ? null : p));
-    // An editor tab reopens on this session after a reload.
-    saveState({ sessionID: s?.id });
-  }, [s?.id]);
+    // An editor tab reopens on this session after a reload; not before the
+    // host has said which one it shows, or a slow start would forget it.
+    if (state.known) saveState({ sessionID: s?.id });
+  }, [s?.id, state.known]);
   useEffect(() => {
     if (!state.error) return;
     setToast(state.error.message);

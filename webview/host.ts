@@ -2,6 +2,7 @@
 // host-owned state the webview renders, applied once per animation frame.
 
 import { useEffect, useReducer } from "react";
+import { push } from "./queue";
 import type { Message } from "../shared/model";
 import type {
   EditorContext,
@@ -44,6 +45,8 @@ export interface State {
   fileMatches?: { query: string; items: { path: string; type: "file" | "directory" }[] };
   /** Bumped when the host asks for a panel (view title buttons, commands). */
   panel?: { name: PanelName; n: number };
+  /** The host has said which session this view shows (or that it shows none). */
+  known?: boolean;
 }
 
 export const initial: State = { server: { kind: "starting" }, commands: [], context: {}, messages: [], mcp: [] };
@@ -67,11 +70,11 @@ export function reduce(state: State, batch: HostToWebview[]): State {
       case "session": {
         const same = s.session?.id === msg.session.id;
         const base = same ? s.messages.slice(0, msg.from) : [];
-        s = { ...s, session: msg.session, messages: msg.from === 0 || same ? base.concat(msg.tail) : msg.tail, error: same ? s.error : undefined };
+        s = { ...s, known: true, session: msg.session, messages: msg.from === 0 || same ? base.concat(msg.tail) : msg.tail, error: same ? s.error : undefined };
         break;
       }
       case "noSession":
-        s = { ...s, session: undefined, messages: [], error: undefined };
+        s = { ...s, known: true, session: undefined, messages: [], error: undefined };
         break;
       case "sessions":
         s = { ...s, sessions: msg.sessions };
@@ -108,15 +111,16 @@ export function useHostState(): State {
   useEffect(() => {
     let queue: HostToWebview[] = [];
     let frame = 0;
+    const flush = () => {
+      frame = 0;
+      const batch = queue;
+      queue = [];
+      dispatch(batch);
+    };
     const onMessage = (e: MessageEvent<HostToWebview>) => {
-      queue.push(e.data);
-      if (!frame)
-        frame = requestAnimationFrame(() => {
-          frame = 0;
-          const batch = queue;
-          queue = [];
-          dispatch(batch);
-        });
+      push(queue, e.data);
+      // A hidden view gets no animation frames; keep applying, just less often.
+      if (!frame) frame = document.hidden ? (setTimeout(flush, 250) as unknown as number) : requestAnimationFrame(flush);
     };
     window.addEventListener("message", onMessage);
     post({ type: "ready" });

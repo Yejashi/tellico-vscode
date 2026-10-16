@@ -16,7 +16,7 @@ function html(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data: https:; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="${codicons}">
 <link rel="stylesheet" href="${css}">
@@ -48,6 +48,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  private lastSession?: string;
+
   private applyBadge() {
     const v = this.view?.webviewView;
     if (v) v.badge = this.waiting ? { value: this.waiting, tooltip: `${this.waiting} question${this.waiting > 1 ? "s" : ""} waiting for you` } : undefined;
@@ -59,7 +61,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     webview.html = html(webview, this.extensionUri);
     webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "dist")] };
     // Keep the session the sidebar showed across a hide/show.
-    const previous = this.view?.sessionID ?? this.controller.rememberedSidebarSession;
+    const previous = this.view?.sessionID ?? this.lastSession ?? this.controller.rememberedSidebarSession;
     const view = {
       id: `sidebar-${++counter}`,
       sessionID: previous,
@@ -70,7 +72,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     };
     this.view = view;
     const subs = bind(webview, this.controller, view);
-    webviewView.onDidDispose(() => subs.forEach((d) => d.dispose()));
+    webviewView.onDidDispose(() => {
+      subs.forEach((d) => d.dispose());
+      // Keep its session for the next resolve, but never touch the dead view.
+      this.lastSession = view.sessionID;
+      if (this.view === view) this.view = undefined;
+    });
     this.applyBadge();
   }
 }
