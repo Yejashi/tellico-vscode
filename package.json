@@ -2,7 +2,7 @@
   "name": "tellico-vscode",
   "displayName": "Tellico",
   "description": "Chat with the Tellico Qwen agents (opencode-tellico) inside VS Code.",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "publisher": "yejashi",
   "license": "MIT",
   "private": true,

@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { Message } from "../shared/model";
+import type { UserMessage } from "../shared/model";
 import type { HostToWebview } from "../shared/protocol";
 import { push } from "../webview/queue";
 
 // host.ts asks for the VS Code API when it loads.
 (globalThis as any).acquireVsCodeApi = () => ({ postMessage() {}, getState() {}, setState() {} });
 
-const msg = (i: number): Message => ({ kind: "user", id: `m${i}`, text: `t${i}`, created: i });
-const update = (from: number, tail: Message[]): HostToWebview => ({ type: "session", session: { id: "s" } as any, from, tail });
+const msg = (i: number): UserMessage => ({ kind: "user", id: `m${i}`, text: `t${i}`, created: i });
+const update = (from: number, tail: UserMessage[]): HostToWebview => ({ type: "session", session: { id: "s" } as any, from, tail });
 
 describe("webview inbox", () => {
   it("folds session updates so the result equals applying each one", async () => {

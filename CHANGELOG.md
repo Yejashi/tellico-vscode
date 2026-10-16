@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 -- 2026-10-16
 
 - **Checkpoints**: rewind the files and conversation to before any message
   you sent (with Redo), edit and resend it, or fork from it.
@@ -30,6 +30,12 @@
   plain-language explanation; the first start no longer connects twice; the
   header's tok/s matches the turn footer.
 - Settings for websearch, steps, loop guard and remote control.
+
+## 0.2.0 -- 2026-10-13
+
+- Session browser with search and build/orchestrate filters; tok/s in the
+  header and under each turn; a session stats panel (throughput, tokens,
+  cache hits, Magic Context, secret-guard and workers).
 
 - Smooth streaming: answers and reasoning are revealed at a steady,
   backlog-following pace like a chat app, instead of in the clusters the
