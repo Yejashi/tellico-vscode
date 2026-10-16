@@ -39,7 +39,7 @@ if (process.argv.includes("--shot")) {
   const only = process.argv.find((a) => a.startsWith("--scene="))?.slice(8);
   const size = process.argv.find((a) => a.startsWith("--size="))?.slice(7) ?? "420,860";
   const themes = process.argv.includes("--light") ? ["light"] : process.argv.includes("--both") ? ["dark", "light"] : ["dark"];
-  const scenes = only ? only.split(",") : ["welcome", "starting", "failed", "fix-and-run", "fix-and-run-mid", "worker-dispatch", "worker-running", "guard-and-interrupt", "history"];
+  const scenes = only ? only.split(",") : ["welcome", "starting", "failed", "fix-and-run", "fix-and-run-mid", "worker-dispatch", "worker-running", "guard-and-interrupt", "history", "extras", "rewind", "queued", "tools", "stats"];
   mkdirSync(`${out}/shots`, { recursive: true });
   for (const theme of themes)
     for (const scene of scenes) {

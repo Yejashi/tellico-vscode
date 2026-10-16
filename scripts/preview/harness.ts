@@ -35,6 +35,8 @@ const prefs: Prefs = {
   connection: "tunnel",
   connectionSetting: "installed",
   magicContext: true,
+  contextLimit: 131072,
+  branch: "main",
 };
 
 const commands = [
@@ -50,17 +52,57 @@ const sessions: SessionSummary[] = [
   { id: "s3", title: "Refactor the event stream reconnect", created: now - 5 * 86_400_000, updated: now - 4 * 86_400_000, agent: "build-tellico-0" },
 ];
 
-function replay(events: ServerEvent[], cut?: number) {
+function replay(events: ServerEvent[], cut?: number, extra: (sid: string) => ServerEvent[] = () => []) {
   const store = new Store();
   for (const e of cut === undefined ? events : events.slice(0, cut)) store.apply(e);
+  const sid = events.find((e) => e.type === "session.created" && !e.data.parentID)!.data.sessionID as string;
+  for (const e of extra(sid)) store.apply(e);
   const root = events.find((e) => e.type === "session.created" && !e.data.parentID)!.data.sessionID as string;
   return store.get(root);
 }
 
-function sessionMsg(events: ServerEvent[], cut?: number): HostToWebview {
-  const { messages, ...meta } = replay(events, cut);
+function sessionMsg(events: ServerEvent[], cut?: number, extra?: (sid: string) => ServerEvent[]): HostToWebview {
+  const { messages, ...meta } = replay(events, cut, extra);
   return { type: "session", session: meta, from: 0, tail: messages };
 }
+
+const t0 = 1791904800000;
+const user = (sid: string, id: string, text: string, delivery: "steer" | "queue" = "steer"): ServerEvent => ({
+  type: "session.inbox.enqueued",
+  created: t0,
+  data: { sessionID: sid, inboxID: id, item: { type: "user", payload: { text }, delivery } },
+});
+
+/** A second turn after fix-and-run: a guard note, a shell run, a compaction. */
+const extras = (sid: string): ServerEvent[] => [
+  user(sid, "msg_x1", "Now run the tests and tell me what fails"),
+  { type: "session.shell.started", created: t0 + 1, data: { sessionID: sid, shell: { id: "sh_1", command: "python3 -m pytest -q", status: "running" } } },
+  { type: "session.shell.ended", created: t0 + 2, data: { sessionID: sid, shell: { id: "sh_1", command: "python3 -m pytest -q", status: "exited", exit: 1 }, output: { output: "F.\n1 failed, 1 passed in 0.03s\n" } } },
+  user(sid, "msg_x2", "(Tellico loop guard) Your last reply began repeating the same paragraph. Stop, summarise what you have, and take one concrete next step."),
+  { type: "session.compaction.started", created: t0 + 3, data: { sessionID: sid, reason: "auto" } },
+  { type: "session.compaction.ended", created: t0 + 4, data: { sessionID: sid, reason: "auto", text: "The user asked to fix add() in calc.py; it returned a - b and now returns a + b." } },
+];
+
+const rewind = (sid: string): ServerEvent[] => [
+  ...extras(sid),
+  { type: "session.revert.staged", data: { sessionID: sid, revert: { messageID: "msg_x1", files: [{ file: "calc.py" }] } } },
+];
+
+const queued = (sid: string): ServerEvent[] => [
+  user(sid, "msg_q1", "After that, add a test for the hostname read too", "queue"),
+  user(sid, "msg_q2", "And update the README", "queue"),
+  { type: "session.retry.scheduled", created: t0, data: { sessionID: sid, attempt: 2, at: Date.now() + 23_000, error: { message: "The cluster is busy: no slot became free within 120s." } } },
+];
+
+const mcp: HostToWebview = {
+  type: "mcp",
+  servers: [
+    { name: "vscode", status: "connected", canAuth: false, builtin: true },
+    { name: "github", status: "needs_auth", error: "Authorization required", canAuth: true },
+    { name: "postgres", status: "failed", error: "NotFound: ChildProcess.spawn (uvx mcp-server-postgres)", canAuth: false },
+    { name: "docs", status: "connected", canAuth: false },
+  ],
+};
 
 /** Index just after the n-th event matching `type`, for mid-turn scenes. */
 const after = (events: ServerEvent[], type: string, n = 1) => {
@@ -93,7 +135,18 @@ const scenes: Record<string, HostToWebview[]> = {
   "worker-dispatch": [...base, sessionMsg(wd)],
   "worker-running": [...base, sessionMsg(wd, after(wd, "session.tool.success", 1) + 5)],
   "guard-and-interrupt": [...base, sessionMsg(gi)],
-  history: [...base, sessionMsg(fr), { type: "showHistory" }],
+  history: [...base, sessionMsg(fr), { type: "showPanel", panel: "history" }],
+  extras: [...base, mcp, sessionMsg(fr, undefined, extras)],
+  rewind: [...base, mcp, sessionMsg(fr, undefined, rewind)],
+  queued: [...base, mcp, sessionMsg(wd, after(wd, "session.tool.success", 1) + 5, queued)],
+  tools: [
+    ...base,
+    mcp,
+    sessionMsg(fr),
+    { type: "savedPermissions", items: [{ id: "p1", action: "bash", resource: "git status*" }, { id: "p2", action: "external_directory", resource: "/tmp/*" }] },
+    { type: "showPanel", panel: "mcp" },
+  ],
+  stats: [...base, sessionMsg(fr), { type: "showPanel", panel: "stats" }],
 };
 
 (window as any).__SCENES = Object.keys(scenes);

@@ -21,6 +21,14 @@ export interface LaunchSettings {
   leadNode: "auto" | "0" | "1";
   magicContext: boolean;
   backgroundSubagents: boolean;
+  /** TELLICO_WEBSEARCH; "default" leaves the launcher's choice. */
+  websearch: string;
+  /** TELLICO_STEPS; 0 leaves the launcher's default. */
+  steps: number;
+  /** TELLICO_LOOP_GUARD=0 when false. */
+  loopGuard: boolean;
+  /** --remote-control / --no-remote-control; "installed" leaves client.env's choice. */
+  remoteControl: "installed" | "on" | "off";
 }
 
 export type ServerState =
@@ -89,6 +97,7 @@ export class ServerManager {
     const args: string[] = [];
     if (s.leadNode !== "auto") args.push(s.leadNode);
     if (!s.magicContext) args.push("--no-magic-context");
+    if (s.remoteControl !== "installed") args.push(s.remoteControl === "on" ? "--remote-control" : "--no-remote-control");
     args.push("serve", "--hostname", "127.0.0.1", "--port", String(port));
 
     const env = { ...process.env };
@@ -105,6 +114,9 @@ export class ServerManager {
     // over the user's explicit setting.
     if (s.leadNode !== "auto") env.TELLICO_LEAD_NODE = s.leadNode;
     else delete env.TELLICO_LEAD_NODE;
+    if (s.websearch && s.websearch !== "default") env.TELLICO_WEBSEARCH = s.websearch;
+    if (s.steps > 0) env.TELLICO_STEPS = String(Math.floor(s.steps));
+    if (!s.loopGuard) env.TELLICO_LOOP_GUARD = "0";
     env.OPENCODE_CALLER = "vscode";
 
     this.events.onLog(`$ ${launcher} ${args.join(" ")}   (cwd ${this.directory})`);

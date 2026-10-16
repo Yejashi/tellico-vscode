@@ -3,13 +3,30 @@
 
 import { useEffect, useReducer } from "react";
 import type { Message } from "../shared/model";
-import type { EditorContext, HostToWebview, Prefs, ServerStatus, SessionMeta, SessionSummary, WebviewToHost } from "../shared/protocol";
+import type {
+  EditorContext,
+  HostToWebview,
+  McpServerView,
+  Prefs,
+  SavedPermissionView,
+  ServerStatus,
+  SessionMeta,
+  SessionSummary,
+  WebviewToHost,
+} from "../shared/protocol";
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): any; setState(s: any): void };
 export const vscode = acquireVsCodeApi();
 export const post = (msg: WebviewToHost) => vscode.postMessage(msg);
 
+/** Merges into the webview's persisted state (drafts, the session a tab shows). */
+export function saveState(patch: Record<string, unknown>) {
+  vscode.setState({ ...(vscode.getState() ?? {}), ...patch });
+}
+
 // ---------------- state ----------------
+
+export type PanelName = "history" | "stats" | "mcp";
 
 export interface State {
   server: ServerStatus;
@@ -18,14 +35,18 @@ export interface State {
   context: EditorContext;
   session?: SessionMeta;
   messages: Message[];
-  error?: string;
-  insert?: { text: string; n: number };
+  error?: { message: string; n: number };
+  /** Text to add to (`replace: false`) or put in the composer. */
+  insert?: { text: string; replace: boolean; n: number };
   sessions?: SessionSummary[];
-  /** Bumped when the host asks for the session browser. */
-  showHistory: number;
+  mcp: McpServerView[];
+  savedPermissions?: SavedPermissionView[];
+  fileMatches?: { query: string; items: { path: string; type: "file" | "directory" }[] };
+  /** Bumped when the host asks for a panel (view title buttons, commands). */
+  panel?: { name: PanelName; n: number };
 }
 
-export const initial: State = { server: { kind: "starting" }, commands: [], context: {}, messages: [], showHistory: 0 };
+export const initial: State = { server: { kind: "starting" }, commands: [], context: {}, messages: [], mcp: [] };
 
 export function reduce(state: State, batch: HostToWebview[]): State {
   let s = state;
@@ -46,7 +67,7 @@ export function reduce(state: State, batch: HostToWebview[]): State {
       case "session": {
         const same = s.session?.id === msg.session.id;
         const base = same ? s.messages.slice(0, msg.from) : [];
-        s = { ...s, session: msg.session, messages: msg.from === 0 || same ? base.concat(msg.tail) : msg.tail, error: undefined };
+        s = { ...s, session: msg.session, messages: msg.from === 0 || same ? base.concat(msg.tail) : msg.tail, error: same ? s.error : undefined };
         break;
       }
       case "noSession":
@@ -55,14 +76,26 @@ export function reduce(state: State, batch: HostToWebview[]): State {
       case "sessions":
         s = { ...s, sessions: msg.sessions };
         break;
-      case "showHistory":
-        s = { ...s, showHistory: s.showHistory + 1 };
+      case "showPanel":
+        s = { ...s, panel: { name: msg.panel, n: (s.panel?.n ?? 0) + 1 } };
         break;
       case "insertText":
-        s = { ...s, insert: { text: msg.text, n: (s.insert?.n ?? 0) + 1 } };
+        s = { ...s, insert: { text: msg.text, replace: false, n: (s.insert?.n ?? 0) + 1 } };
+        break;
+      case "setComposer":
+        s = { ...s, insert: { text: msg.text, replace: true, n: (s.insert?.n ?? 0) + 1 } };
+        break;
+      case "fileMatches":
+        s = { ...s, fileMatches: { query: msg.query, items: msg.items } };
+        break;
+      case "mcp":
+        s = { ...s, mcp: msg.servers };
+        break;
+      case "savedPermissions":
+        s = { ...s, savedPermissions: msg.items };
         break;
       case "error":
-        s = { ...s, error: msg.message };
+        s = { ...s, error: { message: msg.message, n: (s.error?.n ?? 0) + 1 } };
         break;
     }
   }

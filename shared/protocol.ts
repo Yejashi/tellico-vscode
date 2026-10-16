@@ -22,6 +22,31 @@ export interface SessionSummary {
   created: number;
   updated: number;
   agent?: string;
+  /** A turn is running right now. */
+  busy?: boolean;
+  /** Finished since it was last looked at. */
+  unread?: boolean;
+  pinned?: boolean;
+}
+
+/** Something attached to a prompt besides @-mentions in its text. */
+export type Attachment =
+  | { kind: "file"; path: string; range?: { start: number; end: number } }
+  | { kind: "image"; name: string; dataUrl: string };
+
+export interface McpServerView {
+  name: string;
+  status: "connected" | "pending" | "disabled" | "failed" | "needs_auth";
+  error?: string;
+  canAuth: boolean;
+  /** The extension's own VS Code bridge, registered at runtime. */
+  builtin?: boolean;
+}
+
+export interface SavedPermissionView {
+  id: string;
+  action: string;
+  resource: string;
 }
 
 export interface Prefs {
@@ -39,6 +64,12 @@ export interface Prefs {
   connectionSetting?: "installed" | "tunnel" | "gateway";
   /** tellico.magicContext: whether the launcher loads the Magic Context plugin. */
   magicContext?: boolean;
+  /** The model's context window and output cap, from the server. */
+  contextLimit?: number;
+  /** Whether the model accepts pasted images. */
+  images?: boolean;
+  /** Current git branch of the workspace. */
+  branch?: string;
 }
 
 /** Session metadata without the transcript. */
@@ -58,14 +89,20 @@ export type HostToWebview =
   | { type: "noSession" }
   /** Top-level sessions, most recent first, for the session browser. */
   | { type: "sessions"; sessions: SessionSummary[] }
-  /** Open the session browser (the view title's history button). */
-  | { type: "showHistory" }
   | { type: "insertText"; text: string }
+  /** Replace the composer's text (edit-and-resend, a rewind). */
+  | { type: "setComposer"; text: string }
+  | { type: "fileMatches"; query: string; items: { path: string; type: "file" | "directory" }[] }
+  | { type: "mcp"; servers: McpServerView[] }
+  | { type: "savedPermissions"; items: SavedPermissionView[] }
+  /** Open one of the webview's panels (view title buttons). */
+  | { type: "showPanel"; panel: "history" | "stats" | "mcp" }
   | { type: "error"; message: string };
 
 export type WebviewToHost =
   | { type: "ready" }
-  | { type: "send"; text: string; attachContext: boolean }
+  /** `queue` waits for the running turn to end; `steer` joins it at the next step. */
+  | { type: "send"; text: string; attachContext: boolean; delivery?: "steer" | "queue"; attachments?: Attachment[] }
   | { type: "command"; name: string; text: string }
   | { type: "interrupt" }
   | { type: "newSession" }
@@ -82,4 +119,28 @@ export type WebviewToHost =
   | { type: "revertFile"; path: string }
   | { type: "copy"; text: string }
   | { type: "restartServer" }
-  | { type: "showLogs" };
+  | { type: "showLogs" }
+  /** Set the transcript aside from this user message on; `files` also restores the files. */
+  | { type: "rewind"; messageID: string; files: boolean }
+  /** Rewind to a user message and put its text back in the composer. */
+  | { type: "editMessage"; messageID: string }
+  | { type: "fork"; messageID: string }
+  | { type: "revertUndo" }
+  | { type: "revertCommit" }
+  | { type: "pending"; id: string; action: "cancel" | "steer" }
+  | { type: "compact" }
+  | { type: "shell"; command: string }
+  | { type: "renameSession"; id: string; title?: string }
+  | { type: "pinSession"; id: string; pinned: boolean }
+  | { type: "findFiles"; query: string }
+  | { type: "pickFiles" }
+  | { type: "stopWorker"; id: string }
+  | { type: "mcpList" }
+  | { type: "mcpToggle"; name: string; enable: boolean }
+  | { type: "mcpAuth"; name: string }
+  | { type: "mcpAdd" }
+  | { type: "mcpImport" }
+  | { type: "mcpOpenConfig" }
+  | { type: "savedPermissions" }
+  | { type: "removeSavedPermission"; id: string }
+  | { type: "openSettings" };

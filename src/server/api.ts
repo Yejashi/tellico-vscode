@@ -36,6 +36,10 @@ export interface SessionInfo {
   model?: ModelRef;
   created: number;
   updated: number;
+  /** When the last turn ended, and when a client last looked after that. */
+  idle?: number;
+  viewed?: number;
+  pinned?: boolean;
 }
 
 export interface PromptFile {
@@ -334,8 +338,13 @@ export class Api {
 
   // ---------- MCP ----------
 
+  /** MCP routes take the location as a deep-object query and ignore `directory`. */
+  private get loc(): Record<string, string> {
+    return { "location[directory]": this.conn.directory };
+  }
+
   async mcp(): Promise<McpServer[]> {
-    const list = await this.call<any[]>("GET", "/api/mcp");
+    const list = await this.call<any[]>("GET", "/api/mcp", undefined, this.loc);
     return (list ?? []).map((m) => ({
       name: String(m.name),
       status: m.status?.status ?? m.status ?? "pending",
@@ -346,19 +355,19 @@ export class Api {
 
   /** Adds or replaces a server for this server's lifetime; connects at once. */
   addMcp(name: string, config: Record<string, unknown>): Promise<unknown> {
-    return this.call("PUT", `/api/experimental/mcp/${encodeURIComponent(name)}`, { config });
+    return this.call("PUT", `/api/experimental/mcp/${encodeURIComponent(name)}`, { config }, this.loc);
   }
 
   removeMcp(name: string): Promise<unknown> {
-    return this.call("DELETE", `/api/experimental/mcp/${encodeURIComponent(name)}`);
+    return this.call("DELETE", `/api/experimental/mcp/${encodeURIComponent(name)}`, undefined, this.loc);
   }
 
   connectMcp(name: string): Promise<unknown> {
-    return this.call("POST", `/api/experimental/mcp/${encodeURIComponent(name)}/connect`);
+    return this.call("POST", `/api/experimental/mcp/${encodeURIComponent(name)}/connect`, undefined, this.loc);
   }
 
   disconnectMcp(name: string): Promise<unknown> {
-    return this.call("POST", `/api/experimental/mcp/${encodeURIComponent(name)}/disconnect`);
+    return this.call("POST", `/api/experimental/mcp/${encodeURIComponent(name)}/disconnect`, undefined, this.loc);
   }
 
   /** Starts an MCP server's OAuth sign-in. Returns only the attempt, never credentials. */
@@ -405,7 +414,7 @@ export class Api {
    * default model. Only these numbers leave this method: the same payload
    * carries the API key.
    */
-  async defaultModel(): Promise<{ node?: 0 | 1; limits?: ModelLimits }> {
+  async defaultModel(): Promise<{ node?: 0 | 1; limits?: ModelLimits; images?: boolean }> {
     const m = await this.call<any>("GET", "/api/model/default");
     const match = /^tellico-([01])$/.exec(String(m?.providerID ?? ""));
     const context = Number(m?.limit?.context);
@@ -413,6 +422,7 @@ export class Api {
     return {
       node: match ? (Number(match[1]) as 0 | 1) : undefined,
       limits: context > 0 ? { context, output: output > 0 ? output : 0 } : undefined,
+      images: Array.isArray(m?.capabilities?.input) && m.capabilities.input.includes("image"),
     };
   }
 
@@ -435,5 +445,8 @@ function toSessionInfo(s: any): SessionInfo {
     model: s.model ?? undefined,
     created: s.time?.created ?? 0,
     updated: s.time?.updated ?? s.time?.created ?? 0,
+    idle: s.time?.idle ?? undefined,
+    viewed: s.time?.viewed ?? undefined,
+    pinned: Boolean(s.metadata?.pinned),
   };
 }

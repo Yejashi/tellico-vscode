@@ -33,6 +33,9 @@ export function Tray({ children, files, stats, root }: { children: ChildSession[
               {c.status === "busy" ? <span className="spin" /> : <Icon name={c.status === "error" ? "error" : "pass-filled"} className={`st-${c.status}`} />}
               <span className="grow ellipsis">{c.title}</span>
               {c.agent && <span className="badge">{c.agent.replace("tellico-", "")}</span>}
+              {c.status === "busy" && (
+                <button className="ghost" title="Stop this worker" onClick={(e) => (e.stopPropagation(), post({ type: "stopWorker", id: c.id }))}><Icon name="debug-stop" /></button>
+              )}
               <Icon name="link-external" className="dim" />
             </div>
           ))}
@@ -73,12 +76,15 @@ export function Tray({ children, files, stats, root }: { children: ChildSession[
 
 // ---------------- permission + question cards ----------------
 
-export function Permissions({ items }: { items: PermissionRequest[] }) {
+export function Permissions({ items, leadID }: { items: PermissionRequest[]; leadID: string }) {
   return (
     <>
       {items.map((p) => (
-        <div key={p.id} className="card">
-          <div className="card-title"><Icon name="shield" /> Allow {p.action.replace(/_/g, " ")}?</div>
+        <div key={p.id} className="card" role="alertdialog" aria-label={`Permission: ${p.action}`}>
+          <div className="card-title">
+            <Icon name="shield" /> Allow {p.action.replace(/_/g, " ")}?
+            {p.sessionID !== leadID && <span className="badge">a worker asks</span>}
+          </div>
           {p.title && <div className="card-text">{p.title}</div>}
           {p.resources.length > 0 && <pre className="resource">{p.resources.join("\n")}</pre>}
           <div className="choices">

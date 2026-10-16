@@ -31,6 +31,10 @@ describe.skipIf(!live)("live opencode-tellico serve", () => {
       // TELLICO_LIVE_CONNECTION=tunnel|gateway runs the same test over either.
       connection: (process.env.TELLICO_LIVE_CONNECTION as "tunnel" | "gateway" | undefined) ?? "installed",
       gatewayUrl: "",
+      websearch: "default",
+      steps: 0,
+      loopGuard: true,
+      remoteControl: "installed",
     }), {
       onState: () => {},
       onLog: (l) => logs.push(l),

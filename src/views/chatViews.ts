@@ -38,8 +38,20 @@ function bind(webview: vscode.Webview, controller: Controller, view: ChatView): 
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
   view?: ChatView & { webviewView: vscode.WebviewView };
+  private waiting = 0;
 
-  constructor(private readonly extensionUri: vscode.Uri, private readonly controller: Controller) {}
+  constructor(private readonly extensionUri: vscode.Uri, private readonly controller: Controller) {
+    // Questions waiting for an answer show as a count on the Tellico icon.
+    controller.onWaiting((n) => {
+      this.waiting = n;
+      this.applyBadge();
+    });
+  }
+
+  private applyBadge() {
+    const v = this.view?.webviewView;
+    if (v) v.badge = this.waiting ? { value: this.waiting, tooltip: `${this.waiting} question${this.waiting > 1 ? "s" : ""} waiting for you` } : undefined;
+  }
 
   resolveWebviewView(webviewView: vscode.WebviewView) {
     const webview = webviewView.webview;
@@ -58,15 +70,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     webview.html = html(webview, this.extensionUri);
     const subs = bind(webview, this.controller, view);
     webviewView.onDidDispose(() => subs.forEach((d) => d.dispose()));
+    this.applyBadge();
   }
 }
 
-export function openChatTab(extensionUri: vscode.Uri, controller: Controller, sessionID?: string): ChatView {
-  const panel = vscode.window.createWebviewPanel("tellico.chatTab", "Tellico", { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false }, {
-    enableScripts: true,
-    retainContextWhenHidden: true,
-    localResourceRoots: [vscode.Uri.joinPath(extensionUri, "dist")],
-  });
+const TAB_OPTIONS = (extensionUri: vscode.Uri): vscode.WebviewPanelOptions & vscode.WebviewOptions => ({
+  enableScripts: true,
+  retainContextWhenHidden: true,
+  localResourceRoots: [vscode.Uri.joinPath(extensionUri, "dist")],
+});
+
+/** Opens a chat in an editor tab, or adopts one VS Code restored after a reload. */
+export function openChatTab(extensionUri: vscode.Uri, controller: Controller, sessionID?: string, restored?: vscode.WebviewPanel): ChatView {
+  const panel =
+    restored ?? vscode.window.createWebviewPanel(TAB_VIEW_TYPE, "Tellico", { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false }, TAB_OPTIONS(extensionUri));
+  if (restored) panel.webview.options = TAB_OPTIONS(extensionUri);
   panel.iconPath = vscode.Uri.joinPath(extensionUri, "media", "tellico.svg");
   const view: ChatView = {
     id: `tab-${++counter}`,
@@ -81,6 +99,19 @@ export function openChatTab(extensionUri: vscode.Uri, controller: Controller, se
   panel.webview.html = html(panel.webview, extensionUri);
   const subs = bind(panel.webview, controller, view);
   panel.onDidDispose(() => subs.forEach((d) => d.dispose()));
-  if (sessionID) void controller.openSession(view, sessionID);
+  // A restored tab's webview asks for its session itself once it is ready.
+  if (sessionID && !restored) void controller.openSession(view, sessionID);
   return view;
+}
+
+export const TAB_VIEW_TYPE = "tellico.chatTab";
+
+/** Brings chat tabs back after a reload; the webview saved its session id in its state. */
+export class TabSerializer implements vscode.WebviewPanelSerializer {
+  constructor(private readonly extensionUri: vscode.Uri, private readonly controller: Controller, private readonly adopt: (v: ChatView) => void) {}
+
+  async deserializeWebviewPanel(panel: vscode.WebviewPanel, state: unknown) {
+    const id = typeof (state as any)?.sessionID === "string" ? (state as any).sessionID : undefined;
+    this.adopt(openChatTab(this.extensionUri, this.controller, id, panel));
+  }
 }

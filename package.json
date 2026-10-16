@@ -22,7 +22,8 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onWebviewPanel:tellico.chatTab"
   ],
   "contributes": {
     "viewsContainers": {
@@ -98,6 +99,67 @@
         "command": "tellico.openChanges",
         "title": "Open Changed File Diff",
         "category": "Tellico"
+      },
+      {
+        "command": "tellico.stats",
+        "title": "Session Stats",
+        "category": "Tellico",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "tellico.mcp",
+        "title": "MCP Servers",
+        "category": "Tellico",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "tellico.mcpAdd",
+        "title": "Add MCP Server\u2026",
+        "category": "Tellico",
+        "icon": "$(add)"
+      },
+      {
+        "command": "tellico.mcpImport",
+        "title": "Import MCP Servers from VS Code\u2026",
+        "category": "Tellico"
+      },
+      {
+        "command": "tellico.compact",
+        "title": "Compact Conversation",
+        "category": "Tellico",
+        "icon": "$(fold)"
+      },
+      {
+        "command": "tellico.stop",
+        "title": "Stop the Running Turn",
+        "category": "Tellico",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "tellico.explainSelection",
+        "title": "Explain Selection",
+        "category": "Tellico"
+      },
+      {
+        "command": "tellico.fixProblems",
+        "title": "Fix Problems in This File",
+        "category": "Tellico"
+      },
+      {
+        "command": "tellico.sendTerminalSelection",
+        "title": "Send Terminal Selection to Chat",
+        "category": "Tellico"
+      },
+      {
+        "command": "tellico.sendLastTerminalCommand",
+        "title": "Send Last Terminal Command to Chat",
+        "category": "Tellico"
+      },
+      {
+        "command": "tellico.openSettings",
+        "title": "Open Settings",
+        "category": "Tellico",
+        "icon": "$(settings-gear)"
       }
     ],
     "menus": {
@@ -116,6 +178,41 @@
           "command": "tellico.openInTab",
           "when": "view == tellico.chat",
           "group": "navigation@3"
+        },
+        {
+          "command": "tellico.mcp",
+          "when": "view == tellico.chat",
+          "group": "1_tools@1"
+        },
+        {
+          "command": "tellico.stats",
+          "when": "view == tellico.chat",
+          "group": "1_tools@2"
+        },
+        {
+          "command": "tellico.compact",
+          "when": "view == tellico.chat",
+          "group": "1_tools@3"
+        },
+        {
+          "command": "tellico.switchConnection",
+          "when": "view == tellico.chat",
+          "group": "2_server@1"
+        },
+        {
+          "command": "tellico.restartServer",
+          "when": "view == tellico.chat",
+          "group": "2_server@2"
+        },
+        {
+          "command": "tellico.showLogs",
+          "when": "view == tellico.chat",
+          "group": "2_server@3"
+        },
+        {
+          "command": "tellico.openSettings",
+          "when": "view == tellico.chat",
+          "group": "3_settings@1"
         }
       ],
       "editor/context": [
@@ -123,12 +220,41 @@
           "command": "tellico.addSelection",
           "when": "editorHasSelection",
           "group": "tellico@1"
+        },
+        {
+          "command": "tellico.explainSelection",
+          "when": "editorHasSelection && resourceScheme == file",
+          "group": "tellico@2"
+        },
+        {
+          "command": "tellico.fixProblems",
+          "when": "resourceScheme == file",
+          "group": "tellico@3"
         }
       ],
       "commandPalette": [
         {
           "command": "tellico.openChanges",
           "when": "false"
+        },
+        {
+          "command": "tellico.explainSelection",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "tellico.sendTerminalSelection",
+          "when": "terminalTextSelected"
+        }
+      ],
+      "terminal/context": [
+        {
+          "command": "tellico.sendTerminalSelection",
+          "when": "terminalTextSelected",
+          "group": "tellico@1"
+        },
+        {
+          "command": "tellico.sendLastTerminalCommand",
+          "group": "tellico@2"
         }
       ]
     },
@@ -147,6 +273,12 @@
         "command": "tellico.addSelection",
         "key": "alt+k",
         "when": "editorTextFocus"
+      },
+      {
+        "command": "tellico.stop",
+        "key": "ctrl+alt+escape",
+        "mac": "cmd+alt+escape",
+        "when": "tellico.busy"
       }
     ],
     "configuration": {
@@ -235,9 +367,119 @@
           "type": "boolean",
           "default": true,
           "description": "Reveal streamed text at a steady pace, like a chat app, instead of showing each cluster of tokens as it arrives. Works the same over SSH and the gateway."
+        },
+        "tellico.ideTools": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Run a small MCP server named `vscode` that lets the agent ask VS Code for **diagnostics**, **open editors** and the **selection**. Loopback only, with a per-window token. Its three tools add a few hundred tokens to each request."
+        },
+        "tellico.codeActions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Offer \"Fix with Tellico\" on problems and \"Explain with Tellico\" on selections in the lightbulb menu."
+        },
+        "tellico.notifications": {
+          "type": "string",
+          "enum": [
+            "unfocused",
+            "always",
+            "off"
+          ],
+          "default": "unfocused",
+          "enumDescriptions": [
+            "Only while VS Code is in the background.",
+            "Every time.",
+            "Never."
+          ],
+          "description": "Notify when a turn finishes or Tellico is waiting for an answer."
+        },
+        "tellico.websearch": {
+          "type": "string",
+          "enum": [
+            "default",
+            "tavily",
+            "exa",
+            "parallel",
+            "random",
+            "off"
+          ],
+          "default": "default",
+          "description": "Web search provider for the agents (TELLICO_WEBSEARCH). default leaves the launcher's choice; off removes the tool."
+        },
+        "tellico.steps": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Maximum model steps per turn for the lead agents (TELLICO_STEPS). 0 leaves the launcher's default (200)."
+        },
+        "tellico.loopGuard": {
+          "type": "boolean",
+          "default": true,
+          "description": "Let the loop guard interrupt a reply that starts repeating itself (TELLICO_LOOP_GUARD=0 when off)."
+        },
+        "tellico.remoteControl": {
+          "type": "string",
+          "enum": [
+            "installed",
+            "on",
+            "off"
+          ],
+          "default": "installed",
+          "description": "Phone remote control for sessions in this window (opencode-tellico --[no-]remote-control). installed follows ./install.sh."
         }
       }
-    }
+    },
+    "walkthroughs": [
+      {
+        "id": "tellico.start",
+        "title": "Get started with Tellico",
+        "description": "Chat with the Tellico Qwen agents on your cluster, inside VS Code.",
+        "steps": [
+          {
+            "id": "connect",
+            "title": "Choose how to reach the cluster",
+            "description": "Use your SSH account, or the API gateway with a per-user key.\n[Switch Connection](command:tellico.switchConnection)\n[Set Gateway API Key](command:tellico.setGatewayKey)",
+            "media": {
+              "markdown": "media/walkthrough/connect.md"
+            },
+            "completionEvents": [
+              "onCommand:tellico.switchConnection",
+              "onCommand:tellico.setGatewayKey"
+            ]
+          },
+          {
+            "id": "chat",
+            "title": "Open the chat",
+            "description": "Ask Tellico to build, fix or explain. @ mentions files, ! runs a command, / lists commands.\n[Open Tellico](command:tellico.focus)",
+            "media": {
+              "markdown": "media/walkthrough/chat.md"
+            },
+            "completionEvents": [
+              "onCommand:tellico.focus"
+            ]
+          },
+          {
+            "id": "rewind",
+            "title": "Rewind, edit or fork any message",
+            "description": "Hover a message you sent to restore the files and conversation to before it, edit and resend it, or branch a new session from there.",
+            "media": {
+              "markdown": "media/walkthrough/rewind.md"
+            }
+          },
+          {
+            "id": "mcp",
+            "title": "Give the agent more tools (MCP)",
+            "description": "Tellico already asks VS Code for diagnostics. Add MCP servers, or import the ones VS Code knows.\n[MCP Servers](command:tellico.mcp)",
+            "media": {
+              "markdown": "media/walkthrough/mcp.md"
+            },
+            "completionEvents": [
+              "onCommand:tellico.mcp"
+            ]
+          }
+        ]
+      }
+    ]
   },
   "scripts": {
     "build": "node esbuild.mjs",

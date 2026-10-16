@@ -3,15 +3,20 @@
 // view (the sidebar and any editor tabs). Each view shows one session.
 
 import * as vscode from "vscode";
-import { AgentInfo, Api, Connection } from "./server/api";
+import { existsSync } from "node:fs";
+import { AgentInfo, Api, Connection, Delivery } from "./server/api";
 import { EventStream } from "./server/events";
 import { LaunchSettings, ServerManager, ServerState } from "./server/manager";
-import { Store } from "./state/reducer";
+import { ServerEvent, Store } from "./state/reducer";
 import { Mode, ModelRef, parseTellicoAgent, SessionView, tellicoAgent, ThinkLevel } from "../shared/model";
-import { EditorContext, HostToWebview, Prefs, ServerStatus, WebviewToHost } from "../shared/protocol";
+import { Attachment, EditorContext, HostToWebview, McpServerView, Prefs, ServerStatus, SessionSummary, WebviewToHost } from "../shared/protocol";
 import { reversePatch } from "./diff/patch";
 import { ConnectionSetting, effectiveConnection, hasKey, installedMode, writeGatewayKey } from "./server/connection";
 import { BEFORE_SCHEME, BeforeContentProvider } from "./diff/beforeProvider";
+import { buildPromptFiles } from "./prompt";
+import { IDE_SERVER, IdeBridge } from "./ide/bridge";
+import { Attention, NotifyWhen } from "./attention";
+import { McpManager } from "./mcp/manage";
 
 /** What the controller needs from a webview, sidebar or tab alike. */
 export interface ChatView {
@@ -35,12 +40,20 @@ export class Controller implements vscode.Disposable {
   private serverStatus: ServerStatus = { kind: "stopped" };
   private agents: AgentInfo[] = [];
   private commands: { name: string; description?: string }[] = [];
+  private mcpServers: McpServerView[] = [];
   private prefs: Prefs;
   private context: EditorContext = {};
   private dirty = new Set<string>();
   private flushTimer?: NodeJS.Timeout;
+  private refetchTimer?: NodeJS.Timeout;
   private starting?: Promise<Connection | undefined>;
   private readonly disposables: vscode.Disposable[] = [];
+  private readonly ide: IdeBridge;
+  private readonly attention: Attention;
+  private readonly mcp: McpManager;
+  private readonly waitingEmitter = new vscode.EventEmitter<number>();
+  /** Pending permission requests and questions, for the view badge. */
+  readonly onWaiting = this.waitingEmitter.event;
   readonly statusItem: vscode.StatusBarItem;
 
   constructor(private readonly ext: vscode.ExtensionContext, private readonly before: BeforeContentProvider) {
@@ -60,34 +73,42 @@ export class Controller implements vscode.Disposable {
     this.statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     this.statusItem.command = "tellico.focus";
     this.statusItem.show();
+    this.ide = new IdeBridge(() => this.directory, (l) => this.log.info(l));
+    this.attention = new Attention(
+      () => vscode.workspace.getConfiguration("tellico").get<NotifyWhen>("notifications", "unfocused"),
+      (id) => void this.openInPrimary(id),
+    );
+    this.mcp = new McpManager(() => this.directory, (l) => this.log.info(l));
     this.renderStatus();
 
     this.disposables.push(
       this.log,
       this.statusItem,
+      this.ide,
+      this.waitingEmitter,
       vscode.window.onDidChangeActiveTextEditor(() => this.updateContext()),
       vscode.window.onDidChangeTextEditorSelection(() => this.updateContext()),
       vscode.workspace.onDidChangeConfiguration((e) => {
-        if (
-          ["showReasoning", "attachActiveEditor", "smoothStreaming"].some((k) => e.affectsConfiguration(`tellico.${k}`))
-        ) {
+        if (["showReasoning", "attachActiveEditor", "smoothStreaming"].some((k) => e.affectsConfiguration(`tellico.${k}`))) {
           const c = vscode.workspace.getConfiguration("tellico");
           this.prefs.showReasoning = c.get("showReasoning", false);
           this.prefs.smoothStreaming = c.get("smoothStreaming", true);
           this.prefs.attachActiveEditor = c.get("attachActiveEditor", true);
           this.broadcast({ type: "prefs", prefs: this.prefs });
         }
+        if (e.affectsConfiguration("tellico.ideTools") && this.api) {
+          if (this.ideToolsEnabled) void this.ide.register(this.api).then(() => this.refreshMcp());
+          else void this.ide.unregister(this.api).then(() => this.refreshMcp());
+        }
         if (
-          ["launcherPath", "leadNode", "magicContext", "backgroundSubagents", "connection", "gatewayUrl"].some((k) =>
+          ["launcherPath", "leadNode", "magicContext", "backgroundSubagents", "connection", "gatewayUrl", "websearch", "steps", "loopGuard", "remoteControl"].some((k) =>
             e.affectsConfiguration(`tellico.${k}`),
           )
         ) {
           this.prefs.magicContext = vscode.workspace.getConfiguration("tellico").get("magicContext", true);
           // A connection change made from the chat restarts by itself.
           if (this.restartingForConnection) return;
-          void vscode.window
-            .showInformationMessage("Tellico server settings changed.", "Restart Server")
-            .then((pick) => pick && this.restart());
+          void vscode.window.showInformationMessage("Tellico server settings changed.", "Restart Server").then((pick) => pick && this.restart());
         }
       }),
     );
@@ -96,6 +117,10 @@ export class Controller implements vscode.Disposable {
 
   get directory(): string | undefined {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  }
+
+  private get ideToolsEnabled(): boolean {
+    return vscode.workspace.getConfiguration("tellico").get<boolean>("ideTools", true);
   }
 
   // ---------- server lifecycle ----------
@@ -144,6 +169,10 @@ export class Controller implements vscode.Disposable {
       leadNode: c.get("leadNode", "auto") as LaunchSettings["leadNode"],
       magicContext: c.get("magicContext", true),
       backgroundSubagents: c.get("backgroundSubagents", false),
+      websearch: c.get<string>("websearch", "default"),
+      steps: c.get<number>("steps", 0),
+      loopGuard: c.get<boolean>("loopGuard", true),
+      remoteControl: c.get<"installed" | "on" | "off">("remoteControl", "installed"),
     };
   }
 
@@ -175,22 +204,15 @@ export class Controller implements vscode.Disposable {
     const api = new Api(conn);
     this.api = api;
     this.agents = await api.agents();
-    this.commands = (await api.commands().catch(() => [])).filter((c) => !c.name.startsWith("think-"));
-    const node = this.configuredNode() ?? (await api.defaultNode().catch(() => undefined)) ?? 0;
-    this.prefs.node = node;
+    this.commands = await this.loadCommands(api);
+    const model = await api.defaultModel().catch(() => ({}) as Awaited<ReturnType<Api["defaultModel"]>>);
+    this.prefs.node = this.configuredNode() ?? model.node ?? 0;
+    this.prefs.contextLimit = model.limits?.context;
+    this.prefs.images = model.images;
+    this.prefs.branch = (await api.vcs().catch(() => undefined))?.branch;
     this.stream?.stop();
     this.stream = new EventStream(api, {
-      onEvent: (ev) => {
-        for (const id of this.store.apply(ev)) this.markDirty(id);
-        // When a turn ends, take the authoritative changed-file list from the
-        // server: it includes workers' edits and files changed by shell commands.
-        if (/^session\.execution\.(succeeded|interrupted|failed)$/.test(ev.type) || ev.type === "session.revert.staged" || ev.type === "session.revert.cleared") {
-          const sid = ev.data?.sessionID as string | undefined;
-          const root = sid ? this.store.sessions.get(sid) : undefined;
-          const lead = root?.parentID ?? root?.id;
-          if (lead && [...this.views].some((v) => v.sessionID === lead)) void this.refreshChanges(lead);
-        }
-      },
+      onEvent: (ev) => this.onEvent(api, ev),
       onConnected: (first) => {
         this.log.info(first ? "event stream connected" : "event stream reconnected; resyncing open sessions");
         if (!first) void this.resyncAll();
@@ -201,7 +223,44 @@ export class Controller implements vscode.Disposable {
     this.setServer({ kind: "ready" });
     this.broadcast({ type: "prefs", prefs: this.prefs });
     this.broadcast({ type: "commands", commands: this.commands });
+    if (this.ideToolsEnabled) await this.ide.register(api);
+    void this.refreshMcp();
     await this.resyncAll();
+  }
+
+  private async loadCommands(api: Api) {
+    return (await api.commands().catch(() => [])).filter((c) => !c.name.startsWith("think-"));
+  }
+
+  private onEvent(api: Api, ev: ServerEvent) {
+    const changed = this.store.apply(ev);
+    for (const id of changed) this.markDirty(id);
+    const sid = ev.data?.sessionID as string | undefined;
+    // When a turn ends or a rewind moves, take the authoritative changed-file
+    // list from the server: it includes workers' edits and shell side effects.
+    if (/^session\.execution\.(succeeded|interrupted|failed)$|^session\.revert\.(staged|cleared)$/.test(ev.type)) {
+      const root = sid ? this.store.sessions.get(sid) : undefined;
+      const lead = root?.parentID ?? root?.id;
+      if (lead && [...this.views].some((v) => v.sessionID === lead)) void this.refreshChanges(lead);
+      if (sid && ev.type.startsWith("session.execution.")) this.markViewed(sid);
+    }
+    if (ev.type === "session.revert.committed" && sid) void this.loadSession(sid).then(() => this.resend(sid)).catch(() => {});
+    if (ev.type.startsWith("mcp.")) this.debounceRefetch();
+    if (ev.type === "command.updated") void this.loadCommands(api).then((c) => ((this.commands = c), this.broadcast({ type: "commands", commands: c })));
+    if (ev.type === "vcs.branch.updated") void api.vcs().then((v) => ((this.prefs.branch = v?.branch), this.broadcast({ type: "prefs", prefs: this.prefs })));
+    // A location reload drops runtime MCP servers and cancels pending asks.
+    if (ev.type === "location.shutdown") {
+      setTimeout(() => {
+        if (this.api !== api) return;
+        if (this.ideToolsEnabled) void this.ide.register(api);
+        void this.resyncAll();
+      }, 1500);
+    }
+  }
+
+  private debounceRefetch() {
+    clearTimeout(this.refetchTimer);
+    this.refetchTimer = setTimeout(() => void this.refreshMcp(), 250);
   }
 
   private configuredNode(): 0 | 1 | undefined {
@@ -270,12 +329,25 @@ export class Controller implements vscode.Disposable {
 
   private renderStatus() {
     const s = this.serverStatus;
-    const busy = [...this.store.sessions.values()].some((x) => x.status === "busy" && !x.parentID);
-    const icon = s.kind === "ready" ? (busy ? "$(sync~spin)" : "$(hubot)") : s.kind === "starting" ? "$(loading~spin)" : s.kind === "failed" ? "$(error)" : "$(circle-slash)";
+    const leads = [...this.store.sessions.values()].filter((x) => !x.parentID);
+    const busy = leads.some((x) => x.status === "busy");
+    const waiting = this.attention.waiting(this.store.sessions.values());
+    const icon =
+      s.kind === "ready" ? (waiting ? "$(bell-dot)" : busy ? "$(sync~spin)" : "$(hubot)") : s.kind === "starting" ? "$(loading~spin)" : s.kind === "failed" ? "$(error)" : "$(circle-slash)";
     const via = this.prefs.connection === "gateway" ? "gateway" : "SSH";
-    this.statusItem.text = `${icon} Tellico${s.kind === "ready" ? ` · ${this.prefs.mode} · node ${this.prefs.node} · ${via}` : ""}`;
-    this.statusItem.tooltip = s.kind === "failed" ? s.message : `Tellico server: ${s.kind}`;
+    this.statusItem.text = `${icon} Tellico${s.kind === "ready" ? (waiting ? " · needs you" : ` · ${this.prefs.mode} · node ${this.prefs.node} · ${via}`) : ""}`;
+    this.statusItem.tooltip =
+      s.kind === "failed" ? s.message : waiting ? `${waiting} question${waiting > 1 ? "s" : ""} waiting for an answer` : `Tellico server: ${s.kind}${busy ? " · working" : ""}`;
+    this.statusItem.backgroundColor = waiting ? new vscode.ThemeColor("statusBarItem.warningBackground") : s.kind === "failed" ? new vscode.ThemeColor("statusBarItem.errorBackground") : undefined;
+    this.statusItem.accessibilityInformation = { label: `Tellico: ${this.statusItem.tooltip}` };
+    this.waitingEmitter.fire(waiting);
+    if (busy !== this.busyContext) {
+      this.busyContext = busy;
+      void vscode.commands.executeCommand("setContext", "tellico.busy", busy);
+    }
   }
+
+  private busyContext?: boolean;
 
   // ---------- views ----------
 
@@ -293,6 +365,7 @@ export class Controller implements vscode.Disposable {
     view.post({ type: "prefs", prefs: this.prefs });
     view.post({ type: "commands", commands: this.commands });
     view.post({ type: "context", context: this.context });
+    view.post({ type: "mcp", servers: this.mcpServers });
     if (view.sessionID) this.sendSession(view, true);
     else view.post({ type: "noSession" });
   }
@@ -307,7 +380,15 @@ export class Controller implements vscode.Disposable {
     const ids = this.dirty;
     this.dirty = new Set();
     for (const v of this.views) if (v.sessionID && ids.has(v.sessionID)) this.sendSession(v, false);
+    this.attention.update(
+      [...ids].map((id) => this.store.sessions.get(id)).filter((s): s is SessionView => Boolean(s)),
+      () => this.store.sessions.values(),
+    );
     this.renderStatus();
+  }
+
+  private resend(id: string) {
+    for (const v of this.views) if (v.sessionID === id) this.sendSession(v, true);
   }
 
   /** The sidebar reopens on its last session after a window reload. */
@@ -323,13 +404,21 @@ export class Controller implements vscode.Disposable {
     const s = this.store.sessions.get(view.sessionID!);
     if (!s) return;
     if (full) this.remember(view);
-    const { messages, ...meta } = s;
+    const { messages, ...own } = s;
+    // A worker's permission requests and questions are answered from the
+    // lead's view: the user is watching the lead, not the worker.
+    const kids = s.children.map((c) => this.store.sessions.get(c.id)).filter((c): c is SessionView => Boolean(c));
+    const meta = {
+      ...own,
+      permissions: [...own.permissions, ...kids.flatMap((c) => c.permissions)],
+      forms: [...own.forms, ...kids.flatMap((c) => c.forms)],
+    };
     // Everything but the transcript is small; send it every time. The
     // transcript is re-sent from the first message that can still change.
     const key = JSON.stringify([meta.status, meta.permissions.length, meta.forms.length, meta.children.length]);
     let from = 0;
     if (!full && view.sent.key === key && messages.length >= view.sent.length) {
-      const firstOpen = messages.findIndex((m) => m.kind === "assistant" && !m.done);
+      const firstOpen = messages.findIndex((m) => (m.kind === "assistant" && !m.done) || (m.kind === "shell" && m.status === "running"));
       from = Math.max(0, Math.min(view.sent.length - 1, firstOpen === -1 ? messages.length : firstOpen));
     }
     view.sent = { length: messages.length, key };
@@ -342,6 +431,15 @@ export class Controller implements vscode.Disposable {
     for (const id of ids) await this.loadSession(id).catch((e) => this.log.warn(`resync ${id}: ${e.message}`));
     await this.loadPending().catch(() => {});
     for (const v of this.views) if (v.sessionID) this.sendSession(v, true);
+  }
+
+  /**
+   * The whole session as a diff range: the server's default is only the
+   * newest turn, which would drop files edited earlier from the list.
+   */
+  private sessionRange(id: string): { from?: string; to?: string } {
+    const users = this.store.get(id).messages.filter((m) => m.kind === "user");
+    return { from: users[0]?.id, to: users[users.length - 1]?.id };
   }
 
   /** Changed files of a session and its workers, from the server's diffs. */
@@ -362,15 +460,6 @@ export class Controller implements vscode.Disposable {
     this.markDirty(id);
   }
 
-  /**
-   * The whole session as a diff range: the server's default is only the
-   * newest turn, which would drop files edited earlier from the list.
-   */
-  private sessionRange(id: string): { from?: string; to?: string } {
-    const users = this.store.get(id).messages.filter((m) => m.kind === "user");
-    return { from: users[0]?.id, to: users[users.length - 1]?.id };
-  }
-
   private async loadSession(id: string): Promise<SessionView> {
     const api = this.api!;
     const [info, items, inbox] = await Promise.all([api.sessionRaw(id), api.messages(id), api.inbox(id).catch(() => [])]);
@@ -384,7 +473,18 @@ export class Controller implements vscode.Disposable {
       else s.children.push({ id: c.id, title: c.title, agent: c.agent, status: "idle" });
     }
     await this.refreshChanges(id);
+    if (info?.time?.idle && !(info.time.viewed >= info.time.idle)) void api.view(id, info.time.idle).catch(() => {});
     return s;
+  }
+
+  /** The user saw this session finish, if it is on screen in a focused window. */
+  private markViewed(id: string) {
+    if (!vscode.window.state.focused || ![...this.views].some((v) => v.sessionID === id)) return;
+    const api = this.api;
+    void api
+      ?.sessionRaw(id)
+      .then((info) => info?.time?.idle && api.view(id, info.time.idle))
+      .catch(() => {});
   }
 
   private async loadPending() {
@@ -421,7 +521,7 @@ export class Controller implements vscode.Disposable {
         }
         return;
       case "send":
-        return this.send(view, msg.text, msg.attachContext);
+        return this.send(view, msg.text, msg.attachContext, msg.delivery, msg.attachments);
       case "command": {
         const id = await this.ensureSession(view);
         await this.api!.command(id, msg.name, msg.text);
@@ -450,8 +550,7 @@ export class Controller implements vscode.Disposable {
         return this.setPrefs(view, msg.prefs);
       case "permission": {
         await this.api!.replyPermission(msg.sessionID, msg.requestID, msg.decision);
-        for (const id of this.store.apply({ type: "permission.replied", data: { sessionID: msg.sessionID, requestID: msg.requestID } }))
-          this.markDirty(id);
+        for (const id of this.store.apply({ type: "permission.replied", data: { sessionID: msg.sessionID, requestID: msg.requestID } })) this.markDirty(id);
         return;
       }
       case "formReply":
@@ -480,6 +579,74 @@ export class Controller implements vscode.Disposable {
       case "showLogs":
         this.log.show();
         return;
+      case "rewind":
+        return this.rewind(view, msg.messageID, msg.files);
+      case "editMessage":
+        return this.editMessage(view, msg.messageID);
+      case "fork":
+        return this.fork(view, msg.messageID);
+      case "revertUndo":
+        if (view.sessionID) await this.api?.revertClear(view.sessionID);
+        return;
+      case "revertCommit":
+        if (view.sessionID) await this.api?.revertCommit(view.sessionID);
+        return;
+      case "pending":
+        if (!view.sessionID || !this.api) return;
+        if (msg.action === "cancel") await this.api.cancelInbox(view.sessionID, msg.id);
+        else await this.api.steerInbox(view.sessionID, msg.id);
+        return;
+      case "compact": {
+        const id = await this.ensureSession(view);
+        await this.api!.compact(id);
+        return;
+      }
+      case "shell": {
+        const id = await this.ensureSession(view);
+        await this.api!.shell(id, msg.command);
+        return;
+      }
+      case "renameSession":
+        return this.renameSession(msg.id, msg.title);
+      case "pinSession":
+        await this.api?.setMetadata(msg.id, { pinned: msg.pinned });
+        return this.sendSessions(...this.views);
+      case "findFiles":
+        return this.findFiles(view, msg.query);
+      case "pickFiles":
+        return this.pickFiles(view);
+      case "stopWorker":
+        await this.api?.interrupt(msg.id);
+        return;
+      case "mcpList":
+        return this.refreshMcp();
+      case "mcpToggle":
+        if (!this.api) return;
+        if (msg.name === IDE_SERVER) {
+          await vscode.workspace.getConfiguration("tellico").update("ideTools", msg.enable, vscode.ConfigurationTarget.Global);
+          return;
+        }
+        await (msg.enable ? this.api.connectMcp(msg.name) : this.api.disconnectMcp(msg.name));
+        return this.refreshMcp();
+      case "mcpAuth":
+        return this.mcpAuth(msg.name);
+      case "mcpAdd":
+        await this.mcp.add();
+        return;
+      case "mcpImport":
+        await this.mcp.importFromVsCode();
+        return;
+      case "mcpOpenConfig":
+        await this.mcp.openConfig();
+        return;
+      case "savedPermissions":
+        return this.sendSavedPermissions(view);
+      case "removeSavedPermission":
+        await this.api?.removeSavedPermission(msg.id);
+        return this.sendSavedPermissions(view);
+      case "openSettings":
+        await vscode.commands.executeCommand("workbench.action.openSettings", "@ext:yejashi.tellico-vscode");
+        return;
     }
   }
 
@@ -503,13 +670,21 @@ export class Controller implements vscode.Disposable {
     return { id: agent?.modelID ?? "", providerID: agent?.providerID ?? `tellico-${node}`, variant: think };
   }
 
-  private async send(view: ChatView, text: string, attachContext: boolean) {
+  private async send(view: ChatView, text: string, attachContext: boolean, delivery?: Delivery, attachments?: Attachment[]) {
     const trimmed = text.trim();
     if (!trimmed) return;
+    // `!cmd` runs in the session's shell, outside any model turn; its output
+    // reaches the model with the next prompt.
+    const bang = /^!\s*([\s\S]+)$/.exec(trimmed);
+    if (bang) {
+      const id = await this.ensureSession(view);
+      await this.api!.shell(id, bang[1]);
+      return;
+    }
     const slash = /^\/(\S+)\s*([\s\S]*)$/.exec(trimmed);
     if (slash && this.commands.some((c) => c.name === slash[1])) {
       const id = await this.ensureSession(view);
-      await this.api!.command(id, slash[1], slash[2]);
+      await this.api!.command(id, slash[1], slash[2], delivery);
       return;
     }
     if (slash && /^think-(off|low|medium|xhigh)$/.test(slash[1])) {
@@ -518,18 +693,17 @@ export class Controller implements vscode.Disposable {
       if (!slash[2].trim()) return;
       text = slash[2];
     }
+    if (attachments?.some((a) => a.kind === "image") && !this.prefs.images) {
+      throw new Error("The Tellico model does not accept images; describe it in words or attach a text file instead.");
+    }
     const id = await this.ensureSession(view);
-    const files: { uri: string; name?: string }[] = [];
-    let body = text;
+    let active: { path: string; range?: { start: number; end: number } } | undefined;
     if (attachContext && this.prefs.attachActiveEditor) {
       const ed = vscode.window.activeTextEditor;
-      if (ed && ed.document.uri.scheme === "file") {
-        files.push({ uri: ed.document.uri.toString(), name: vscode.workspace.asRelativePath(ed.document.uri) });
-        const sel = this.context.selection;
-        if (sel) body += `\n\n(Selected: ${this.context.file}#L${sel.start}-${sel.end})`;
-      }
+      if (ed && ed.document.uri.scheme === "file") active = { path: ed.document.uri.fsPath, range: this.context.selection };
     }
-    await this.api!.prompt(id, body, files);
+    const files = buildPromptFiles({ text, root: this.directory ?? "/", attachments, active, exists: existsSync });
+    await this.api!.prompt(id, text, files, delivery);
   }
 
   private async setPrefs(view: ChatView, p: Partial<Prefs>) {
@@ -566,6 +740,40 @@ export class Controller implements vscode.Disposable {
     this.markDirty(sid);
   }
 
+  // ---------- checkpoints ----------
+
+  private busyGuard(id: string) {
+    if (this.store.get(id).status === "busy") throw new Error("Stop the running turn first (Esc), then rewind.");
+  }
+
+  /** Rewinds to before a user message: its turn and everything after set aside. */
+  private async rewind(view: ChatView, messageID: string, files: boolean) {
+    const id = view.sessionID;
+    if (!id || !this.api) return;
+    this.busyGuard(id);
+    const r = await this.api.revertStage(id, messageID, files);
+    if (files && r.files.length) void vscode.window.setStatusBarMessage(`$(history) Restored ${r.files.length} file${r.files.length > 1 ? "s" : ""}`, 3000);
+  }
+
+  /** Rewinds and puts the message back in the composer; sending commits the rewind. */
+  private async editMessage(view: ChatView, messageID: string) {
+    const id = view.sessionID;
+    if (!id) return;
+    const m = this.store.get(id).messages.find((x) => x.id === messageID);
+    await this.rewind(view, messageID, true);
+    if (m?.kind === "user") view.post({ type: "setComposer", text: m.text });
+  }
+
+  /** A new session with the conversation up to (not including) this message. */
+  private async fork(view: ChatView, messageID: string) {
+    const id = view.sessionID;
+    if (!id || !this.api) return;
+    const m = this.store.get(id).messages.find((x) => x.id === messageID);
+    const info = await this.api.fork(id, messageID);
+    await this.openSession(view, info.id);
+    if (m?.kind === "user") view.post({ type: "setComposer", text: m.text });
+  }
+
   async openSession(view: ChatView, id: string) {
     await this.ensureServer();
     if (!this.api) return;
@@ -584,18 +792,46 @@ export class Controller implements vscode.Disposable {
     view.reveal();
   }
 
-  /** The view title's history button: the webview shows its own browser. */
-  async showHistory(view: ChatView) {
+  /** Opens a session in the sidebar, or the first view if there is none. */
+  private async openInPrimary(id: string) {
+    await vscode.commands.executeCommand("tellico.chat.focus");
+    const view = [...this.views].find((v) => v.id.startsWith("sidebar")) ?? [...this.views][0];
+    if (view) await this.openSession(view, id);
+  }
+
+  /** Opens a panel in a view (view title buttons, commands). */
+  async showPanel(view: ChatView, panel: "history" | "stats" | "mcp") {
     view.reveal();
-    view.post({ type: "showHistory" });
-    await this.sendSessions(view);
+    view.post({ type: "showPanel", panel });
+    if (panel === "history") await this.sendSessions(view);
+    if (panel === "mcp") await this.refreshMcp();
   }
 
   private async sendSessions(...views: ChatView[]) {
     await this.ensureServer();
     if (!this.api) return;
-    const sessions = (await this.api.sessions(200)).map((s) => ({ id: s.id, title: s.title, created: s.created, updated: s.updated, agent: s.agent }));
+    const [list, active] = await Promise.all([this.api.sessions(200), this.api.active().catch(() => [])]);
+    const busy = new Set(active);
+    const sessions: SessionSummary[] = list.map((s) => ({
+      id: s.id,
+      title: s.title,
+      created: s.created,
+      updated: s.updated,
+      agent: s.agent,
+      busy: busy.has(s.id) || undefined,
+      unread: Boolean(s.idle && !(s.viewed && s.viewed >= s.idle) && !busy.has(s.id)) || undefined,
+      pinned: s.pinned || undefined,
+    }));
     for (const v of views) v.post({ type: "sessions", sessions });
+  }
+
+  private async renameSession(id: string, title?: string) {
+    if (!this.api) return;
+    const current = this.store.sessions.get(id)?.title ?? (await this.api.session(id).catch(() => undefined))?.title;
+    const next = title ?? (await vscode.window.showInputBox({ title: "Rename session", value: current, validateInput: (v) => (v.trim() ? undefined : "Enter a title") }));
+    if (!next?.trim()) return;
+    await this.api.rename(id, next.trim());
+    await this.sendSessions(...this.views);
   }
 
   private async deleteSession(id: string) {
@@ -614,6 +850,57 @@ export class Controller implements vscode.Disposable {
       }
     }
     await this.sendSessions(...this.views);
+  }
+
+  // ---------- MCP ----------
+
+  private async refreshMcp() {
+    const api = this.api;
+    if (!api) return;
+    const list = await api.mcp().catch(() => []);
+    this.mcpServers = list.map((m) => ({
+      name: m.name,
+      status: m.status,
+      error: m.error,
+      canAuth: Boolean(m.integrationID) && m.status === "needs_auth",
+      builtin: m.name === IDE_SERVER && this.ide.running,
+    }));
+    if (!this.ideToolsEnabled && !this.mcpServers.some((m) => m.name === IDE_SERVER))
+      this.mcpServers.push({ name: IDE_SERVER, status: "disabled", canAuth: false, builtin: true });
+    this.broadcast({ type: "mcp", servers: this.mcpServers });
+  }
+
+  /** OAuth sign-in for a remote MCP server, in the browser. */
+  private async mcpAuth(name: string) {
+    const api = this.api;
+    if (!api) return;
+    const server = (await api.mcp()).find((m) => m.name === name);
+    if (!server?.integrationID) throw new Error(`${name} has no sign-in to start.`);
+    const integrationID = server.integrationID;
+    const attempt = await api.startOAuth(integrationID);
+    if (!attempt) throw new Error(`${name} does not offer OAuth sign-in.`);
+    await vscode.env.openExternal(vscode.Uri.parse(attempt.url));
+    if (attempt.mode === "code") {
+      const code = await vscode.window.showInputBox({ title: `Sign in to ${name}`, prompt: attempt.instructions ?? "Paste the code the browser shows", ignoreFocusOut: true });
+      if (!code) return;
+      await api.completeOAuth(integrationID, attempt.attemptID, code.trim());
+    }
+    await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Waiting for ${name} sign-in…`, cancellable: true }, async (_p, token) => {
+      for (let i = 0; i < 150 && !token.isCancellationRequested; i++) {
+        const st = await api.oauthStatus(integrationID, attempt.attemptID).catch(() => "pending");
+        if (st === "complete") return;
+        if (st === "failed" || st === "expired") throw new Error(`${name} sign-in ${st}.`);
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    });
+    await api.connectMcp(name).catch(() => {});
+    await this.refreshMcp();
+  }
+
+  private async sendSavedPermissions(view: ChatView) {
+    if (!this.api) return;
+    const items = await this.api.savedPermissions().catch(() => []);
+    view.post({ type: "savedPermissions", items: items.map((p) => ({ id: p.id, action: p.action, resource: p.resource })) });
   }
 
   // ---------- editor integration ----------
@@ -639,6 +926,45 @@ export class Controller implements vscode.Disposable {
     const { file, selection } = this.context;
     if (!file) return;
     view.post({ type: "insertText", text: selection ? `@${file}#L${selection.start}-${selection.end} ` : `@${file} ` });
+  }
+
+  insertText(view: ChatView, text: string) {
+    view.reveal();
+    view.post({ type: "insertText", text });
+  }
+
+  /** Sends a prompt from outside the chat (code actions, editor commands). */
+  async sendFrom(view: ChatView, text: string, attachments: Attachment[] = []) {
+    view.reveal();
+    await this.handle(view, { type: "send", text, attachContext: false, attachments });
+  }
+
+  /** @-mention completions: open editors first when the query is empty. */
+  private async findFiles(view: ChatView, query: string) {
+    let items: { path: string; type: "file" | "directory" }[] = [];
+    if (!query) {
+      const seen = new Set<string>();
+      for (const g of vscode.window.tabGroups.all)
+        for (const t of g.tabs)
+          if (t.input instanceof vscode.TabInputText && t.input.uri.scheme === "file") {
+            const p = vscode.workspace.asRelativePath(t.input.uri, false);
+            if (!seen.has(p)) {
+              seen.add(p);
+              items.push({ path: p, type: "file" });
+            }
+          }
+      items = items.slice(0, 12);
+    } else if (this.api) {
+      items = await this.api.findFiles(query).catch(() => []);
+    }
+    view.post({ type: "fileMatches", query, items });
+  }
+
+  private async pickFiles(view: ChatView) {
+    const picked = await vscode.window.showOpenDialog({ canSelectMany: true, canSelectFolders: true, defaultUri: this.directory ? vscode.Uri.file(this.directory) : undefined, openLabel: "Attach" });
+    if (!picked?.length) return;
+    const refs = picked.map((u) => `@${vscode.workspace.asRelativePath(u, false).replace(/ /g, "\\ ")}`).join(" ");
+    view.post({ type: "insertText", text: refs + " " });
   }
 
   private resolvePath(p: string): vscode.Uri {
@@ -709,6 +1035,7 @@ export class Controller implements vscode.Disposable {
 
   dispose() {
     this.stream?.stop();
+    void this.ide.unregister(this.api);
     this.manager?.stop();
     for (const d of this.disposables) d.dispose();
   }

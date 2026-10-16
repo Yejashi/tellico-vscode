@@ -2,10 +2,10 @@
 // browser and the session stats.
 
 import React, { useEffect, useState } from "react";
-import type { Prefs, ServerStatus, SessionMeta, SessionSummary } from "../shared/protocol";
+import type { McpServerView, Prefs, SavedPermissionView, ServerStatus, SessionMeta, SessionSummary } from "../shared/protocol";
 import type { SessionStats } from "../shared/stats";
 import { post, State } from "./host";
-import { DAY, fmtDuration, Icon, Logo, relTime } from "./util";
+import { DAY, fmt, fmtDuration, Icon, Logo, relTime } from "./util";
 
 // ---------------- app ----------------
 
@@ -35,7 +35,7 @@ export const SUGGESTIONS = [
   { icon: "git-pull-request", text: "Review my uncommitted changes" },
 ];
 
-export function Empty({ ready, sessions, onBrowse }: { ready: boolean; sessions?: SessionSummary[]; onBrowse(): void }) {
+export function Empty({ ready, sessions, onBrowse, onTools }: { ready: boolean; sessions?: SessionSummary[]; onBrowse(): void; onTools(): void }) {
   useEffect(() => {
     if (ready) post({ type: "listSessions" });
   }, [ready]);
@@ -67,9 +67,12 @@ export function Empty({ ready, sessions, onBrowse }: { ready: boolean; sessions?
         </div>
       )}
       <div className="hints">
+        <span><kbd>@</kbd> files</span>
+        <span><kbd>!</kbd> shell</span>
         <span><kbd>/</kbd> commands</span>
-        <span><kbd>Alt</kbd>+<kbd>K</kbd> reference selection</span>
+        <span><kbd>Alt</kbd>+<kbd>K</kbd> selection</span>
         {!recent.length && <button className="link" onClick={onBrowse}><Icon name="history" /> Resume a session</button>}
+        <button className="link" onClick={onTools}><Icon name="plug" /> Tools</button>
       </div>
     </div>
   );
@@ -83,8 +86,8 @@ export function SessionRow({ s, current, active, compact, onOpen }: { s: Session
   const m = modeOf(s.agent);
   const open = () => (post({ type: "openSession", id: s.id }), onOpen?.());
   return (
-    <div className={`session-row ${current ? "current" : ""} ${active ? "active" : ""}`} onClick={open} title={s.title}>
-      <Icon name={m?.[1] === "orchestrate" ? "organization" : "tools"} className="session-icon" />
+    <div className={`session-row ${current ? "current" : ""} ${active ? "active" : ""} ${s.unread ? "unread" : ""}`} onClick={open} title={s.title}>
+      {s.busy ? <span className="spin session-icon" title="Working" /> : <Icon name={m?.[1] === "orchestrate" ? "organization" : "tools"} className="session-icon" />}
       <div className="grow">
         <div className="ellipsis">{s.title}</div>
         {!compact && (
@@ -94,9 +97,13 @@ export function SessionRow({ s, current, active, compact, onOpen }: { s: Session
         )}
       </div>
       {current && <span className="badge">open</span>}
+      {s.unread && <span className="unread-dot" title="Finished since you last looked" />}
+      {s.pinned && <Icon name="pinned" className="dim pin" />}
       <span className="session-time tabular">{relTime(s.updated)}</span>
       {!compact && (
         <span className="session-actions">
+          <button className="ghost" title={s.pinned ? "Unpin" : "Pin to the top"} onClick={(e) => (e.stopPropagation(), post({ type: "pinSession", id: s.id, pinned: !s.pinned }))}><Icon name={s.pinned ? "pinned-dirty" : "pin"} /></button>
+          <button className="ghost" title="Rename" onClick={(e) => (e.stopPropagation(), post({ type: "renameSession", id: s.id }))}><Icon name="edit" /></button>
           <button className="ghost" title="Open in new tab" onClick={(e) => (e.stopPropagation(), post({ type: "openSession", id: s.id, inNewTab: true }), onOpen?.())}><Icon name="link-external" /></button>
           <button className="ghost" title="Delete session" onClick={(e) => (e.stopPropagation(), post({ type: "deleteSession", id: s.id }))}><Icon name="trash" /></button>
         </span>
@@ -123,7 +130,9 @@ export function HistoryPanel({ sessions, currentId, onClose }: { sessions?: Sess
     post({ type: "listSessions" });
   }, []);
   const q = query.trim().toLowerCase();
-  const list = (sessions ?? []).filter((x) => (mode === "all" || modeOf(x.agent)?.[1] === mode) && (!q || x.title.toLowerCase().includes(q)));
+  const matching = (sessions ?? []).filter((x) => (mode === "all" || modeOf(x.agent)?.[1] === mode) && (!q || x.title.toLowerCase().includes(q)));
+  // Pinned sessions first, then by recency (the server's order).
+  const list = [...matching.filter((x) => x.pinned), ...matching.filter((x) => !x.pinned)];
   useEffect(() => {
     setSel(0);
   }, [q, mode]);
@@ -169,7 +178,7 @@ export function HistoryPanel({ sessions, currentId, onClose }: { sessions?: Sess
           <div className="panel-empty">{sessions.length ? "No sessions match." : "No sessions in this workspace yet."}</div>
         ) : (
           list.map((x, n) => {
-            const g = groupLabel(x.updated, now);
+            const g = x.pinned ? "Pinned" : groupLabel(x.updated, now);
             const head = g !== lastGroup ? <div className="group-label">{(lastGroup = g)}</div> : null;
             return (
               <React.Fragment key={x.id}>
@@ -226,6 +235,23 @@ export function StatsPanel(props: { stats: SessionStats; session: SessionMeta; p
             <div className="tile-k">to first token</div>
           </div>
         </div>
+
+        {st.context !== undefined && prefs?.contextLimit ? (
+          <section>
+            <h3>Context</h3>
+            <ContextBar used={st.context} limit={prefs.contextLimit} wide />
+            <p className="muted small">
+              {prefs.magicContext === false
+                ? "OpenCode compacts the conversation automatically as the window fills."
+                : "Magic Context keeps the conversation inside the window; /ctx-status shows how."}
+            </p>
+            {!session.parentID && (
+              <button className="btn small" onClick={() => (post({ type: "compact" }), onClose())} title="Summarise the conversation so far to free context">
+                <Icon name="fold" /> Compact now
+              </button>
+            )}
+          </section>
+        ) : null}
 
         <section>
           <h3>Throughput</h3>
@@ -296,5 +322,112 @@ export function StatsPanel(props: { stats: SessionStats; session: SessionMeta; p
         <p className="muted small">Measured from server event times. Throughput includes network buffering on the way here.</p>
       </div>
     </div>
+  );
+}
+
+// ---------------- context meter ----------------
+
+/** How full the model's context window is; warns as it nears the limit. */
+export function ContextBar({ used, limit, wide }: { used: number; limit: number; wide?: boolean }) {
+  const frac = Math.min(1, used / limit);
+  const level = frac >= 0.85 ? "high" : frac >= 0.65 ? "mid" : "low";
+  return (
+    <div className={`ctxbar ${level} ${wide ? "wide" : ""}`} title={`${used.toLocaleString()} of ${limit.toLocaleString()} tokens (${Math.round(frac * 100)}%)`}>
+      <div className="ctxbar-track"><div className="ctxbar-fill" style={{ width: `${Math.max(2, frac * 100)}%` }} /></div>
+      {wide && <span className="tabular small">{fmt(used)} / {fmt(limit)} · {Math.round(frac * 100)}%</span>}
+    </div>
+  );
+}
+
+// ---------------- tools: MCP servers and saved permissions ----------------
+
+const MCP_STATUS: Record<McpServerView["status"], { icon: string; label: string }> = {
+  connected: { icon: "pass-filled", label: "connected" },
+  pending: { icon: "loading~spin", label: "connecting" },
+  disabled: { icon: "circle-slash", label: "off" },
+  failed: { icon: "error", label: "failed" },
+  needs_auth: { icon: "key", label: "needs sign-in" },
+};
+
+export function ToolsPanel(props: { servers: McpServerView[]; saved?: SavedPermissionView[]; onClose(): void }) {
+  const { servers, saved, onClose } = props;
+  useEffect(() => {
+    post({ type: "mcpList" });
+    post({ type: "savedPermissions" });
+  }, []);
+  const builtin = servers.find((m) => m.builtin || m.name === "vscode");
+  const others = servers.filter((m) => m !== builtin);
+  return (
+    <div className="panel" onKeyDown={(e) => e.key === "Escape" && onClose()} tabIndex={-1}>
+      <div className="panel-head">
+        <Icon name="plug" />
+        <span className="grow">Tools</span>
+        <button className="ghost" title="Settings" onClick={() => post({ type: "openSettings" })}><Icon name="settings-gear" /></button>
+        <button className="ghost" title="Close (Esc)" onClick={onClose}><Icon name="close" /></button>
+      </div>
+      <div className="panel-body stats">
+        <section>
+          <h3>VS Code bridge</h3>
+          <div className="mcp-row">
+            <Icon name="vscode" className="mcp-icon" />
+            <div className="grow">
+              <div>Diagnostics, open editors, selection</div>
+              <div className="muted small">The agent can ask VS Code what its language servers report, so it checks its edits compile.</div>
+            </div>
+            <Toggle on={builtin ? builtin.status !== "disabled" : false} onChange={(enable) => post({ type: "mcpToggle", name: "vscode", enable })} />
+          </div>
+        </section>
+
+        <section>
+          <h3>MCP servers</h3>
+          {!others.length && <div className="muted small">None configured. MCP servers give the agents more tools; each tool's description is sent with every request, so add only what you need.</div>}
+          {others.map((m) => {
+            const st = MCP_STATUS[m.status] ?? MCP_STATUS.pending;
+            return (
+              <div key={m.name} className={`mcp-row st-${m.status}`}>
+                <Icon name={st.icon} className="mcp-icon" />
+                <div className="grow">
+                  <div className="ellipsis">{m.name} <span className="muted small">{st.label}</span></div>
+                  {m.error && <div className="mcp-error small" title={m.error}>{m.error}</div>}
+                </div>
+                {m.canAuth && <button className="btn small primary" onClick={() => post({ type: "mcpAuth", name: m.name })}>Sign in</button>}
+                {m.status === "failed" && <button className="ghost" title="Retry" onClick={() => post({ type: "mcpToggle", name: m.name, enable: true })}><Icon name="refresh" /></button>}
+                <Toggle on={m.status !== "disabled"} onChange={(enable) => post({ type: "mcpToggle", name: m.name, enable })} title="Off until the server restarts; edit the config to turn it off for good" />
+              </div>
+            );
+          })}
+          <div className="card-actions">
+            <button className="btn small" onClick={() => post({ type: "mcpAdd" })}><Icon name="add" /> Add server…</button>
+            <button className="btn small" onClick={() => post({ type: "mcpImport" })}><Icon name="cloud-download" /> Import from VS Code…</button>
+            <button className="btn small" onClick={() => post({ type: "mcpOpenConfig" })}><Icon name="json" /> Edit config</button>
+          </div>
+          <p className="muted small">Servers live in OpenCode's own config (the project's opencode.json, or the global one). Tellico's secret-guard does not inspect MCP tools.</p>
+        </section>
+
+        <section>
+          <h3>Always-allowed</h3>
+          {saved === undefined ? (
+            <div className="muted small"><span className="spin" /> Loading…</div>
+          ) : !saved.length ? (
+            <div className="muted small">Nothing yet. "Always allow" on a permission card saves a rule here.</div>
+          ) : (
+            saved.map((p) => (
+              <div key={p.id} className="kv">
+                <span className="ellipsis" title={`${p.action}: ${p.resource}`}><b>{p.action.replace(/_/g, " ")}</b> <span className="mono-sm">{p.resource}</span></span>
+                <button className="ghost" title="Forget this rule" onClick={() => post({ type: "removeSavedPermission", id: p.id })}><Icon name="trash" /></button>
+              </div>
+            ))
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function Toggle({ on, onChange, title }: { on: boolean; onChange(v: boolean): void; title?: string }) {
+  return (
+    <button role="switch" aria-checked={on} className={`toggle ${on ? "on" : ""}`} title={title ?? (on ? "On" : "Off")} onClick={() => onChange(!on)}>
+      <span className="knob" />
+    </button>
   );
 }
