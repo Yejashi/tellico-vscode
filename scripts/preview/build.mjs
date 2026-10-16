@@ -37,17 +37,18 @@ if (process.argv.includes("--shot")) {
   const browser = ["/usr/bin/chromium", "/usr/bin/google-chrome-stable", "/usr/bin/google-chrome"].find(existsSync);
   if (!browser) throw new Error("No Chromium found for --shot");
   const only = process.argv.find((a) => a.startsWith("--scene="))?.slice(8);
+  const typed = process.argv.find((a) => a.startsWith("--type="))?.slice(7);
   const size = process.argv.find((a) => a.startsWith("--size="))?.slice(7) ?? "420,860";
   const themes = process.argv.includes("--light") ? ["light"] : process.argv.includes("--both") ? ["dark", "light"] : ["dark"];
   const scenes = only ? only.split(",") : ["welcome", "starting", "failed", "fix-and-run", "fix-and-run-mid", "worker-dispatch", "worker-running", "guard-and-interrupt", "history", "extras", "rewind", "queued", "tools", "stats"];
   mkdirSync(`${out}/shots`, { recursive: true });
   for (const theme of themes)
     for (const scene of scenes) {
-      const file = resolve(`${out}/shots/${scene}-${theme}.png`);
+      const file = resolve(`${out}/shots/${scene}${typed ? "-typed" : ""}-${theme}.png`);
       execFileSync(browser, [
         "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check",
         `--user-data-dir=${resolve(out, ".chrome")}`, `--window-size=${size}`, "--virtual-time-budget=4000",
-        `--screenshot=${file}`, `file://${resolve(out, "index.html")}?scene=${scene}&theme=${theme}&shot`,
+        `--screenshot=${file}`, `file://${resolve(out, "index.html")}?scene=${scene}&theme=${theme}&shot${typed ? `&type=${encodeURIComponent(typed)}` : ""}`,
       ], { stdio: "ignore" });
       console.log(file);
     }

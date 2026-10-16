@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- **Checkpoints**: rewind the files and conversation to before any message
+  you sent (with Redo), edit and resend it, or fork from it.
+- **Queue or steer** while a turn runs (`Enter` / `Ctrl+Enter`), with the
+  queue shown above the input.
+- **Phase line**: waiting for the model, running a tool, retrying with a
+  countdown, or compacting; a context meter against the model's window with
+  *Compact now*.
+- **Composer**: `@` file completion with real attachments and line ranges,
+  `!` shell commands, a draft per session, drop files from the Explorer,
+  recall the last message with `↑`.
+- **MCP**: a Tools panel (status, errors, on/off, OAuth sign-in, saved
+  permissions), add or import servers into OpenCode's own config, and a
+  built-in `vscode` MCP server for diagnostics, open editors and the
+  selection. MCP and Code Mode calls render as such.
+- **Attention**: badge, status bar and background notifications when Tellico
+  waits for you or finishes; a worker's questions show in the lead's view;
+  screen-reader announcements.
+- **Editor**: *Fix with Tellico* / *Explain with Tellico* quick fixes, send
+  terminal selection or the last terminal command, chat tabs restored after
+  a reload, a first-run walkthrough.
+- **History**: rename, pin, busy and unread state.
+- **Fixes**: changed files cover the whole session, not only the latest turn;
+  background subagents are off by default, like the launcher; queued prompts
+  stay out of the transcript until delivered; one interrupt notice, with its
+  reason; loop-guard notes read as notices; every launcher failure has a
+  plain-language explanation; the first start no longer connects twice; the
+  header's tok/s matches the turn footer.
+- Settings for websearch, steps, loop guard and remote control.
+
 - Smooth streaming: answers and reasoning are revealed at a steady,
   backlog-following pace like a chat app, instead of in the clusters the
   server's speculative decoding emits (and through the odd network pause).

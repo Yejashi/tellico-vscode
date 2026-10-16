@@ -175,13 +175,17 @@ export function Composer(props: { state: State; busy: boolean; readOnly: boolean
       .slice(0, 10)
       .map((c) => ({ key: c.name, label: `/${c.name}`, detail: c.description, icon: c.name.includes(":") ? "plug" : "symbol-event", insert: `/${c.name} ` }));
   } else if (completion?.kind === "mention" && state.fileMatches && state.fileMatches.query === completion.query) {
-    suggestions = state.fileMatches.items.map((f) => ({
-      key: f.path,
-      label: f.path.split("/").filter(Boolean).pop() + (f.type === "directory" ? "/" : ""),
-      detail: f.path,
-      icon: f.type === "directory" ? "folder" : "file",
-      insert: `@${escapePath(f.path)} `,
-    }));
+    suggestions = state.fileMatches.items.map((f) => {
+      const name = f.path.split("/").filter(Boolean).pop() ?? f.path;
+      const dir = f.path.slice(0, f.path.length - name.length - (f.path.endsWith("/") ? 1 : 0)).replace(/\/$/, "");
+      return {
+        key: f.path,
+        label: name + (f.type === "directory" ? "/" : ""),
+        detail: dir || undefined,
+        icon: f.type === "directory" ? "folder" : "file",
+        insert: `@${escapePath(f.path)} `,
+      };
+    });
   }
   const menuKey = completion ? `${completion.kind}:${completion.start}:${completion.query}` : "";
   if (menuKey === dismissed) suggestions = [];
@@ -359,7 +363,7 @@ export function Composer(props: { state: State; busy: boolean; readOnly: boolean
         />
         {hint && <div className="composer-hint"><Icon name="info" /> {hint}</div>}
         <div className="composer-foot" onClick={(e) => e.stopPropagation()}>
-          <button className="foot-btn" title="Attach files (or type @)" onClick={() => post({ type: "pickFiles" })}><Icon name="attach" /></button>
+          <button className="foot-btn" title="Attach files or folders (or type @)" onClick={() => post({ type: "pickFiles" })}><Icon name="add" /></button>
           <span className="divider" />
           {prefs && (
             <>

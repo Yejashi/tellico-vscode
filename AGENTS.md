@@ -12,6 +12,12 @@ tellico-agentic-setup) over OpenCode 2's HTTP API and renders a chat UI.
 - `TELLICO_LIVE=1 npx vitest run test/live.test.ts` -- real server, real
   cluster slot. Run it after touching `src/server/`.
 - `npm run package` -- `.vsix`.
+- `npm run preview [-- --shot --both]` -- the webview in a browser from the
+  fixtures (scripts/preview); screenshots land in dist-preview/shots. Use it
+  to look at any webview change.
+- `npm run test:vscode` -- activates the build in a throwaway VS Code window.
+- `test/opencode.test.ts` runs against a plain `opencode serve` (no model,
+  throwaway XDG dirs) whenever opencode 2 is installed.
 
 ## Boundaries
 
@@ -39,6 +45,14 @@ tellico-agentic-setup) over OpenCode 2's HTTP API and renders a chat UI.
   id is read from the agent list, never hardcoded.
 - Webview: React + marked + DOMPurify, styled only with `--vscode-*`
   variables. Effects must not return values (React calls them as cleanup).
+- **MCP**: the extension edits only the user's own OpenCode config files
+  (`src/mcp/`), as `opencode mcp add` would, never the Tellico runtime
+  config. The IDE bridge (`src/ide/`) is registered at runtime through
+  `PUT /api/experimental/mcp/vscode`: loopback, bearer token, Origin
+  checked; keep its tool set tiny (every tool costs tokens per request).
+  MCP routes take `location[directory]`, not `directory`.
+- `jsonc-parser` must be imported from `jsonc-parser/lib/esm/main.js`; its
+  UMD entry breaks under esbuild.
 
 ## Fixtures
 

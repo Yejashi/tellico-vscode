@@ -11,20 +11,46 @@ and Magic Context as `opencode-tellico`, in VS Code instead of a terminal.
 
 - **Streaming chat** in the sidebar or in editor tabs (`Ctrl+Shift+Esc`),
   paced like a chat app so text flows steadily over SSH or the gateway, with
-  collapsible reasoning and a card per tool call.
+  collapsible reasoning and a card per tool call. Tabs come back after a
+  window reload.
+- **Checkpoints**: hover a message you sent to **rewind** the files and the
+  conversation to before it (Redo until you send again), **edit and resend**
+  it, or **fork** a new session from there.
+- **Queue or steer while it works**: `Enter` queues a follow-up for after
+  the turn, `Ctrl+Enter` steers the running turn at its next step. Queued
+  prompts sit above the input with *Steer now* and remove.
+- **Knows what it is waiting on**: the phase line says whether the turn
+  waits for the model (prefill on a cold prompt is slow on a local
+  cluster), runs a tool, retries (with a countdown), or compacts; a context
+  meter shows the window filling, with *Compact now*.
 - **build / orchestrate**, **node 0 / 1** and **thinking level** pickers, the
   same choices as `opencode-tellico [0|1] [--orchestrate] [--think LEVEL]`.
 - **Workers panel**: every subagent the lead dispatches, with live status;
-  click one to read its transcript.
+  click one to read its transcript, stop one that runs away. A worker's
+  permission requests show up in the lead's view.
 - **Changed files**: per session, including workers' edits, with VS Code's own
   diff editor and a one-click revert.
-- **Editor context**: the active file is attached to each message (toggle the
-  chip); `Alt+K` inserts an `@file#Lx-y` reference to the selection.
-- **Slash commands** from the server, including Magic Context's `/ctx-*`, and
-  `/think-off|low|medium|xhigh`.
-- **Permission and question cards** when an agent asks.
-- **History**: resume any session, including ones started in the terminal.
-  Sessions live in OpenCode's own store, so both see the same list.
+- **Context in**: `@` completes files (`@file#L3-9` for lines), the active
+  file and selection are attached (toggle the chip), `Alt+K` inserts a
+  reference, files dropped from the Explorer become references, `!cmd` runs
+  a shell command with no model turn, and terminal output or the last
+  terminal command goes to the chat from the terminal's context menu.
+- **Fix with Tellico** and **Explain with Tellico** in the lightbulb menu.
+- **MCP**: a Tools panel with OpenCode's MCP servers (status, errors,
+  on/off, OAuth sign-in), adding servers or importing VS Code's `mcp.json`,
+  and a built-in `vscode` server that lets the agent ask VS Code for
+  diagnostics, open editors and the selection. See [MCP](#mcp).
+- **Slash commands** from the server, including Magic Context's `/ctx-*`,
+  MCP prompts, and `/think-off|low|medium|xhigh`.
+- **Permission and question cards** when an agent asks; the saved
+  *always allow* rules are listed in the Tools panel and can be removed.
+- **Tells you when it needs you**: a badge on the Tellico icon and the status
+  bar while a question waits, and a notification when a turn ends or asks
+  while VS Code is in the background. Screen readers hear both.
+- **History**: resume, rename or pin any session, including ones started in
+  the terminal; busy and unread sessions are marked. Sessions live in
+  OpenCode's own store, so both see the same list, and each keeps its own
+  draft.
 
 ## How it works
 
@@ -79,6 +105,13 @@ Open a folder, click the Tellico icon in the activity bar, and type.
 | `tellico.attachActiveEditor` | `true` | Attach the active file to each message. |
 | `tellico.showReasoning` | `false` | Expand reasoning blocks by default. |
 | `tellico.smoothStreaming` | `true` | Pace streamed text steadily instead of showing token clusters as they land. |
+| `tellico.ideTools` | `true` | The built-in `vscode` MCP server (diagnostics, open editors, selection). |
+| `tellico.codeActions` | `true` | *Fix with Tellico* / *Explain with Tellico* in the lightbulb menu. |
+| `tellico.notifications` | `unfocused` | Notify when a turn ends or Tellico asks: `unfocused`, `always` or `off`. |
+| `tellico.websearch` | `default` | Web search provider (`TELLICO_WEBSEARCH`): tavily, exa, parallel, random or off. |
+| `tellico.steps` | `0` | Max steps per turn for the leads (`TELLICO_STEPS`); 0 keeps the launcher's 200. |
+| `tellico.loopGuard` | `true` | Off = `TELLICO_LOOP_GUARD=0`. |
+| `tellico.remoteControl` | `installed` | Phone remote control for this window's sessions: `on`, `off`, or as installed. |
 
 Changing a server setting offers to restart the server.
 
@@ -110,7 +143,35 @@ flag was added (`./install.sh --no-start` updates one).
 | `Ctrl+Shift+Esc` | Open a chat in a new editor tab |
 | `Alt+K` | Reference the selection in the composer |
 | `Enter` / `Shift+Enter` | Send / newline |
-| `Esc` | Stop the running turn |
+| `Enter` while busy | Queue for after the turn |
+| `Ctrl+Enter` while busy | Steer the running turn now |
+| `↑` in an empty input | Recall your last message |
+| `@` / `!` / `/` | Files / shell command / slash commands |
+| `Esc` | Stop the running turn (`Ctrl+Alt+Esc` from anywhere) |
+
+## MCP
+
+Open **Tools** (the plug in the chat header, or *Tellico: MCP Servers*).
+
+- **The `vscode` server** is the extension's own: a loopback-only MCP
+  server with a per-window token, registered with the running OpenCode
+  server at startup and never written to any file. It gives the agent
+  three tools (`vscode_diagnostics`, `vscode_open_editors`,
+  `vscode_selection`), so it can check what the language servers say
+  after an edit instead of guessing. Turn it off with `tellico.ideTools`.
+- **Your servers** come from OpenCode's own config, which Tellico sessions
+  load under the Tellico runtime config: an `mcp` block in the project's
+  `opencode.json` or in `~/.config/opencode/opencode.json`. **Add server…**
+  writes there the way `opencode mcp add` does; **Import from VS Code…**
+  copies servers from `.vscode/mcp.json` or your user `mcp.json`, turning
+  `${env:X}` into OpenCode's `{env:X}` so tokens stay in the environment.
+  The server applies edits within seconds; no restart.
+- Servers that need OAuth show **Sign in**, which opens the browser.
+  The switch turns a server off until the server restarts.
+
+Keep the list short: every MCP tool's description is sent with **every**
+request, against Tellico's 131k-token context, and Tellico's secret-guard
+does not inspect MCP tools (workers allow every tool).
 
 ## Troubleshooting
 
@@ -118,6 +179,12 @@ flag was added (`./install.sh --no-start` updates one).
   `./install.sh --no-start` in tellico-agentic-setup.
 - **Server fails to start**: *Tellico: Show Server Logs* shows the launcher's
   own output (tunnel, gateway and config errors appear there first).
+- **First token takes a long time**: a prompt the server has not cached is
+  prefilled at about 1500 tokens/s, so a 100k-token conversation waits over
+  a minute; returning to a session is fast again. The four request slots
+  are shared, so a busy cluster queues you (the gateway retries and says so).
+- **An agent is stuck or looping**: `Esc` stops it; hover the message you
+  sent and **rewind** to try again from a clean state.
 - **Thinking level seems to have no effect**: update the client
   (`./install.sh --no-start` in tellico-agentic-setup); installs from before
   2026-10-13 lose it on OpenCode 2.
@@ -125,21 +192,28 @@ flag was added (`./install.sh --no-start` updates one).
 ## Known limitations
 
 - One server per window, for the first workspace folder.
+- The Tellico model reads text only, so images cannot be attached.
+- MCP servers switched off from the Tools panel come back when the server
+  restarts; edit the config (or set `disabled`) to turn one off for good.
 
 ## Development
 
 ```sh
 npm install
 npm run build          # or: npm run watch
-npm test               # unit tests, driven by recorded server events
+npm test               # unit tests from recorded server events, plus a plain
+                       # `opencode serve` integration test when opencode is installed
 npm run typecheck
+npm run preview        # the webview in a browser, fed by the fixtures
+npm run preview -- --shot --both   # headless screenshots of every scene
+npm run test:vscode    # activate in a throwaway VS Code window
 ```
 
 Press `F5` in VS Code to launch an Extension Development Host. The live
 end-to-end test uses a real cluster slot and is skipped unless asked for:
 
 ```sh
-TELLICO_LIVE=1 npx vitest run test/live.test.ts
+npm run test:live      # TELLICO_LIVE=1; TELLICO_LIVE_CONNECTION=tunnel|gateway
 ```
 
 `npm run package` builds `tellico-vscode-<version>.vsix`. Tag `vX.Y.Z` to

@@ -150,6 +150,19 @@ const scenes: Record<string, HostToWebview[]> = {
 };
 
 (window as any).__SCENES = Object.keys(scenes);
+
+const FILES = ["calc.py", "tests/test_calc.py", "src/calculator/__init__.py", "src/calculator/core.py", "README.md", "src/"].map((path) => ({ path, type: (path.endsWith("/") ? "directory" : "file") as "file" | "directory" }));
+
+/** Types into the composer the way a user would, so menus and modes render (?type=...). */
+function typeInto(text: string) {
+  const el = document.querySelector<HTMLTextAreaElement>(".composer textarea");
+  if (!el) return;
+  const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+  set.call(el, text);
+  el.focus();
+  el.setSelectionRange(text.length, text.length);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+}
 const queue = scenes[sceneName] ?? scenes.welcome;
 
 const sent: unknown[] = [];
@@ -159,7 +172,15 @@ const sent: unknown[] = [];
   return {
     postMessage(msg: any) {
       sent.push(msg);
-      if (msg?.type === "ready") setTimeout(() => queue.forEach((data) => window.dispatchEvent(new MessageEvent("message", { data }))), 0);
+      if (msg?.type === "ready") {
+        setTimeout(() => queue.forEach((data) => window.dispatchEvent(new MessageEvent("message", { data }))), 0);
+        if (params.has("type")) setTimeout(() => typeInto(params.get("type")!), 300);
+      }
+      // Answer @-mention searches from a small fake index.
+      if (msg?.type === "findFiles") {
+        const items = FILES.filter((f) => f.path.toLowerCase().includes(String(msg.query).toLowerCase())).slice(0, 8);
+        setTimeout(() => window.dispatchEvent(new MessageEvent("message", { data: { type: "fileMatches", query: msg.query, items } })), 10);
+      }
     },
     getState: () => state,
     setState: (s: unknown) => (state = s),
