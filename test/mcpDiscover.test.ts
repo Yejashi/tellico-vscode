@@ -98,11 +98,11 @@ describe("discovering servers on this machine", () => {
   });
 
   it("finds installed commands and built SDK packages, not tools or templates", () => {
-    expect(byName.libgen).toMatchObject({ entry: { command: [join(home, "bin", "libgen-mcp")] }, source: "installed command (~/bin)" });
+    expect(byName["libgen-mcp"]).toMatchObject({ entry: { command: [join(home, "bin", "libgen-mcp")] }, source: "installed command (~/bin)" });
     expect(found.some((d) => /inspector|notes/.test(d.name))).toBe(false);
-    expect(byName.books).toMatchObject({ entry: { command: ["/usr/bin/node", join(repo, "servers/books/dist/cli.js")] }, source: "~/repos/mcp-servers/servers/books" });
-    expect(byName.unbuilt).toBeUndefined();
-    expect(byName.server).toBeUndefined();
+    expect(byName["books-mcp"]).toMatchObject({ entry: { command: ["/usr/bin/node", join(repo, "servers/books/dist/cli.js")] }, source: "~/repos/mcp-servers/servers/books" });
+    expect(byName["unbuilt-mcp"]).toBeUndefined();
+    expect(byName["server-mcp"]).toBeUndefined();
   });
 
   it("parses the Codex TOML it needs", () => {

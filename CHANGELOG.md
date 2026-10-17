@@ -1,13 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 -- 2026-10-16
 
 - **Add MCP server** offers the servers already on this machine: other
   clients' configs (Claude Code/Desktop, Cursor, VS Code, Cline, Roo,
   Windsurf, Gemini CLI, Codex, Crush, Zed), installed `*-mcp` commands, and
   MCP SDK packages you built. Secrets from other configs stay `{env:NAME}`
   references unless copied into the global config on request. A new server
-  can be added switched off.
+  can be added switched off. Servers keep the names they are installed
+  under (`libgen-mcp`, `bookfusion-mcp`).
 - **MCP config check**: the Tools panel flags entries OpenCode 2 silently
   misreads (`enabled` under `mcp.servers`, `args`, `env`, a string
   `command`, `"type": "stdio"`) and fixes them in one click.

@@ -267,7 +267,8 @@ function fromCommands(o: DiscoverOptions): Discovered[] {
       const p = join(dir, f);
       if (!isExecutable(p)) continue;
       seen.add(f);
-      out.push({ name: sanitizeName(f.replace(/[-_]?mcp(-server)?$|^mcp[-_](server[-_])?/i, "") || f), entry: { type: "local", command: [p] }, source: `installed command (${tilde(dir, o.home)})`, envKeys: [] });
+      // Named as installed (libgen-mcp stays libgen-mcp).
+      out.push({ name: sanitizeName(f), entry: { type: "local", command: [p] }, source: `installed command (${tilde(dir, o.home)})`, envKeys: [] });
     }
   }
   return out;
@@ -318,7 +319,8 @@ function mcpPackage(dir: string, o: DiscoverOptions): Discovered | undefined {
   const file = resolve(dir, rel);
   // Only built servers: a bin that does not exist yet would fail to start.
   if (!existsSync(file)) return undefined;
-  const name = sanitizeName(String(pkg.name ?? binName).replace(/^@[^/]+\//, "").replace(/[-_]?mcp(-server)?$|^mcp[-_](server[-_])?/i, "") || binName);
+  // The package's own name, without an npm scope.
+  const name = sanitizeName(String(pkg.name ?? binName).replace(/^@[^/]+\//, "") || binName);
   return { name, entry: { type: "local", command: [o.node, file] }, source: tilde(dir, o.home), envKeys: [] };
 }
 
