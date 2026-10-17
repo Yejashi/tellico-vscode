@@ -159,6 +159,19 @@ Open **Tools** (the plug in the chat header, or *Tellico: MCP Servers*).
   three tools (`vscode_diagnostics`, `vscode_open_editors`,
   `vscode_selection`), so it can check what the language servers say
   after an edit instead of guessing. Turn it off with `tellico.ideTools`.
+- **Add server…** first lists the MCP servers already on this machine:
+  ones configured in Claude Code, Claude Desktop, Cursor, VS Code, Cline,
+  Roo, Windsurf, Gemini CLI, Codex, Crush or Zed; installed `*-mcp`
+  commands; and servers you built (Node packages on the MCP SDK with a
+  built `bin`, under `~/Documents/repos`, `~/code` and the like, plus
+  `tellico.mcpSearchPaths`). It can add one switched off. Environment values
+  found in another client's config are written as `{env:NAME}` references
+  unless you choose to copy them into your global config; they are never
+  copied into a project file.
+- **Config check**: OpenCode 2 silently misreads some entries under
+  `mcp.servers` -- `"enabled": false` (the server starts anyway), `args` and
+  `env` (ignored), a string `command` or `"type": "stdio"` (the server is
+  dropped). The Tools panel flags them and **Fix** rewrites them.
 - **Your servers** come from OpenCode's own config, which Tellico sessions
   load under the Tellico runtime config: an `mcp` block in the project's
   `opencode.json` or in `~/.config/opencode/opencode.json`. **Add server…**

@@ -7,6 +7,7 @@ import type { Message } from "../shared/model";
 import type {
   EditorContext,
   HostToWebview,
+  McpConfigIssues,
   McpServerView,
   Prefs,
   SavedPermissionView,
@@ -41,6 +42,7 @@ export interface State {
   insert?: { text: string; replace: boolean; n: number };
   sessions?: SessionSummary[];
   mcp: McpServerView[];
+  mcpIssues: McpConfigIssues[];
   savedPermissions?: SavedPermissionView[];
   fileMatches?: { query: string; items: { path: string; type: "file" | "directory" }[] };
   /** Bumped when the host asks for a panel (view title buttons, commands). */
@@ -49,7 +51,7 @@ export interface State {
   known?: boolean;
 }
 
-export const initial: State = { server: { kind: "starting" }, commands: [], context: {}, messages: [], mcp: [] };
+export const initial: State = { server: { kind: "starting" }, commands: [], context: {}, messages: [], mcp: [], mcpIssues: [] };
 
 export function reduce(state: State, batch: HostToWebview[]): State {
   let s = state;
@@ -92,7 +94,7 @@ export function reduce(state: State, batch: HostToWebview[]): State {
         s = { ...s, fileMatches: { query: msg.query, items: msg.items } };
         break;
       case "mcp":
-        s = { ...s, mcp: msg.servers };
+        s = { ...s, mcp: msg.servers, mcpIssues: msg.issues ?? s.mcpIssues };
         break;
       case "savedPermissions":
         s = { ...s, savedPermissions: msg.items };

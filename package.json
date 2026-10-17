@@ -426,6 +426,14 @@
           ],
           "default": "installed",
           "description": "Phone remote control for sessions in this window (opencode-tellico --[no-]remote-control). installed follows ./install.sh."
+        },
+        "tellico.mcpSearchPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Extra folders **Add MCP Server** searches (a few levels deep) for MCP servers you built: Node packages that depend on `@modelcontextprotocol/sdk` and have a built `bin`. `~/Documents/repos`, `~/repos`, `~/code`, `~/src`, `~/projects` and `~/dev` are always searched."
         }
       }
     },

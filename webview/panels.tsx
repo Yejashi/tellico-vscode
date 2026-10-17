@@ -2,7 +2,7 @@
 // browser and the session stats.
 
 import React, { useEffect, useState } from "react";
-import type { McpServerView, Prefs, SavedPermissionView, ServerStatus, SessionMeta, SessionSummary } from "../shared/protocol";
+import type { McpConfigIssues, McpServerView, Prefs, SavedPermissionView, ServerStatus, SessionMeta, SessionSummary } from "../shared/protocol";
 import type { SessionStats } from "../shared/stats";
 import { post, State } from "./host";
 import { DAY, fmt, fmtDuration, Icon, Logo, relTime } from "./util";
@@ -349,8 +349,9 @@ const MCP_STATUS: Record<McpServerView["status"], { icon: string; label: string 
   needs_auth: { icon: "key", label: "needs sign-in" },
 };
 
-export function ToolsPanel(props: { servers: McpServerView[]; saved?: SavedPermissionView[]; onClose(): void }) {
-  const { servers, saved, onClose } = props;
+export function ToolsPanel(props: { servers: McpServerView[]; issues: McpConfigIssues[]; saved?: SavedPermissionView[]; root?: string; onClose(): void }) {
+  const { servers, issues, saved, onClose } = props;
+  const flagged = new Set(issues.flatMap((f) => f.issues.map((i) => i.name)));
   useEffect(() => {
     post({ type: "mcpList" });
     post({ type: "savedPermissions" });
@@ -378,6 +379,20 @@ export function ToolsPanel(props: { servers: McpServerView[]; saved?: SavedPermi
           </div>
         </section>
 
+        {issues.map((f) => (
+          <div key={f.file} className="card config-issue" role="alert">
+            <div className="card-title"><Icon name="warning" /> OpenCode misreads {f.issues.length === 1 ? "a server" : `${f.issues.length} servers`} in {f.scope === "global" ? "your global config" : "this project's config"}</div>
+            <div className="mono-sm muted ellipsis" title={f.file}>{f.file}</div>
+            {f.issues.map((i) => (
+              <div key={i.name} className="card-text small"><b>{i.name}</b>: {i.problem}.</div>
+            ))}
+            <div className="card-actions">
+              <button className="btn primary small" onClick={() => post({ type: "mcpFixConfig", file: f.file })}><Icon name="wrench" /> Fix {f.issues.length === 1 ? "it" : "them"}</button>
+              <button className="btn small" onClick={() => post({ type: "mcpOpenConfig" })}>Edit config</button>
+            </div>
+          </div>
+        ))}
+
         <section>
           <h3>MCP servers</h3>
           {!others.length && <div className="muted small">None configured. MCP servers give the agents more tools; each tool's description is sent with every request, so add only what you need.</div>}
@@ -387,7 +402,10 @@ export function ToolsPanel(props: { servers: McpServerView[]; saved?: SavedPermi
               <div key={m.name} className={`mcp-row st-${m.status}`}>
                 <Icon name={st.icon} className="mcp-icon" />
                 <div className="grow">
-                  <div className="ellipsis">{m.name} <span className="muted small">{st.label}</span></div>
+                  <div className="ellipsis">
+                    {m.name} <span className="muted small">{st.label}</span>
+                    {flagged.has(m.name) && <span className="badge warn" title="Its config entry is misread; see the warning above"> config</span>}
+                  </div>
                   {m.error && <div className="mcp-error small" title={m.error}>{m.error}</div>}
                 </div>
                 {m.canAuth && <button className="btn small primary" onClick={() => post({ type: "mcpAuth", name: m.name })}>Sign in</button>}

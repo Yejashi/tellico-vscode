@@ -582,3 +582,9 @@ body.vscode-dark .shimmer { --tc-shimmer: #ffffffcc; background-color: color-mix
 .toggle.on { background: color-mix(in srgb, var(--tc-accent) 45%, transparent); border-color: transparent; }
 .toggle.on .knob { transform: translateX(12px); background: var(--vscode-foreground); }
 :focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+
+/* ---------- MCP config check ---------- */
+.config-issue { border-color: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 55%, transparent); margin-bottom: 10px; }
+.config-issue .card-title .codicon { color: var(--vscode-editorWarning-foreground, #cca700); }
+.config-issue .card-text { margin-top: 4px; }
+.badge.warn { background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 25%, transparent); color: var(--vscode-foreground); }

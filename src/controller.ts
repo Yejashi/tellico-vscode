@@ -8,7 +8,7 @@ import { EventStream } from "./server/events";
 import { LaunchSettings, ServerManager, ServerState } from "./server/manager";
 import { ServerEvent, Store } from "./state/reducer";
 import { Mode, ModelRef, parseTellicoAgent, SessionView, tellicoAgent, ThinkLevel } from "../shared/model";
-import { Attachment, EditorContext, HostToWebview, McpServerView, Prefs, ServerStatus, SessionSummary, WebviewToHost } from "../shared/protocol";
+import { Attachment, EditorContext, HostToWebview, McpConfigIssues, McpServerView, Prefs, ServerStatus, SessionSummary, WebviewToHost } from "../shared/protocol";
 import { reversePatch } from "./diff/patch";
 import { ConnectionSetting, effectiveConnection, hasKey, installedMode, writeGatewayKey } from "./server/connection";
 import { BEFORE_SCHEME, BeforeContentProvider } from "./diff/beforeProvider";
@@ -40,6 +40,7 @@ export class Controller implements vscode.Disposable {
   private agents: AgentInfo[] = [];
   private commands: { name: string; description?: string }[] = [];
   private mcpServers: McpServerView[] = [];
+  private mcpIssues: McpConfigIssues[] = [];
   private prefs: Prefs;
   private context: EditorContext = {};
   private dirty = new Set<string>();
@@ -248,7 +249,8 @@ export class Controller implements vscode.Disposable {
       if (sid && ev.type.startsWith("session.execution.")) this.markViewed(sid);
     }
     if (ev.type === "session.revert.committed" && sid) void this.loadSession(sid).then(() => this.resend(sid)).catch(() => {});
-    if (ev.type.startsWith("mcp.")) this.debounceRefetch();
+    // Config edits (by hand or by Add server) change both the servers and what the check finds.
+    if (ev.type.startsWith("mcp.") || ev.type === "config.updated") this.debounceRefetch();
     if (ev.type === "command.updated") void this.loadCommands(api).then((c) => ((this.commands = c), this.broadcast({ type: "commands", commands: c })));
     if (ev.type === "vcs.branch.updated") void api.vcs().then((v) => ((this.prefs.branch = v?.branch), this.broadcast({ type: "prefs", prefs: this.prefs })));
     // A location reload drops runtime MCP servers and cancels pending asks.
@@ -369,7 +371,7 @@ export class Controller implements vscode.Disposable {
     view.post({ type: "prefs", prefs: this.prefs });
     view.post({ type: "commands", commands: this.commands });
     view.post({ type: "context", context: this.context });
-    view.post({ type: "mcp", servers: this.mcpServers });
+    view.post({ type: "mcp", servers: this.mcpServers, issues: this.mcpIssues });
     if (view.sessionID) this.sendSession(view, true);
     else view.post({ type: "noSession" });
   }
@@ -638,8 +640,15 @@ export class Controller implements vscode.Disposable {
       case "mcpAuth":
         return this.mcpAuth(msg.name);
       case "mcpAdd":
-        await this.mcp.add();
+        await this.mcp.add(
+          this.mcpServers.map((m) => m.name),
+          vscode.workspace.getConfiguration("tellico").get<string[]>("mcpSearchPaths", []),
+        );
         return;
+      case "mcpFixConfig":
+        this.mcp.fix(msg.file);
+        void vscode.window.setStatusBarMessage("$(check) MCP config fixed; OpenCode applies it in a few seconds", 4000);
+        return this.refreshMcp();
       case "mcpImport":
         await this.mcp.importFromVsCode();
         return;
@@ -876,7 +885,8 @@ export class Controller implements vscode.Disposable {
     }));
     if (!this.ideToolsEnabled && !this.mcpServers.some((m) => m.name === IDE_SERVER))
       this.mcpServers.push({ name: IDE_SERVER, status: "disabled", canAuth: false, builtin: true });
-    this.broadcast({ type: "mcp", servers: this.mcpServers });
+    this.mcpIssues = this.mcp.lint();
+    this.broadcast({ type: "mcp", servers: this.mcpServers, issues: this.mcpIssues });
   }
 
   /** OAuth sign-in for a remote MCP server, in the browser. */

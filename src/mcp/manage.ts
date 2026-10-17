@@ -7,11 +7,15 @@ import * as vscode from "vscode";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { defaultOptions, discover, Discovered, identity } from "./discover";
 import {
+  ConfigIssue,
+  fixConfig,
   globalConfigCandidates,
   hostLabel,
   ImportResult,
   isHttpUrl,
+  lintConfig,
   listServers,
   McpServerEntry,
   parseVsCodeMcp,
@@ -57,15 +61,136 @@ export class McpManager {
     return file;
   }
 
-  async add() {
-    const kind = await vscode.window.showQuickPick(
-      [
-        { label: "$(terminal) Local command", detail: "A program OpenCode starts, e.g. npx -y @modelcontextprotocol/server-github", value: "local" as const },
-        { label: "$(cloud) Remote URL", detail: "A Streamable HTTP or SSE endpoint, e.g. https://mcp.example.com/mcp", value: "remote" as const },
-      ],
-      { title: "Add MCP server", placeHolder: COST_NOTE },
+  /** Every OpenCode config file that exists for this window: the project's, then the global ones. */
+  configFiles(): { file: string; scope: Scope }[] {
+    const project = this.root() ? projectConfigCandidates(this.root()!) : [];
+    return [...project.map((file) => ({ file, scope: "project" as Scope })), ...globalConfigCandidates().map((file) => ({ file, scope: "global" as Scope }))].filter((f) => existsSync(f.file));
+  }
+
+  /** Servers already configured, by name and by command line or URL. */
+  private configured(runtimeNames: string[]): { names: Set<string>; ids: Set<string> } {
+    const names = new Set(runtimeNames);
+    const ids = new Set<string>();
+    for (const { file } of this.configFiles()) {
+      try {
+        for (const s of listServers(readFileSync(file, "utf8"))) {
+          names.add(s.name);
+          if (s.entry && typeof s.entry === "object") ids.add(identity(s.entry as any));
+        }
+      } catch {}
+    }
+    return { names, ids };
+  }
+
+  /** Entries OpenCode would misread, per config file. */
+  lint(): { file: string; scope: Scope; issues: ConfigIssue[] }[] {
+    const out: { file: string; scope: Scope; issues: ConfigIssue[] }[] = [];
+    for (const f of this.configFiles()) {
+      try {
+        const issues = lintConfig(readFileSync(f.file, "utf8"));
+        if (issues.length) out.push({ ...f, issues });
+      } catch {}
+    }
+    return out;
+  }
+
+  /** Rewrites the flagged entries of one config file the way OpenCode reads them. */
+  fix(file: string) {
+    if (!this.configFiles().some((f) => f.file === file)) throw new Error(`${file} is not an OpenCode config file of this window.`);
+    const text = readFileSync(file, "utf8");
+    const next = fixConfig(text);
+    if (next === text) return;
+    writeFileSync(file, next);
+    this.log(`MCP: fixed ${lintConfig(text).map((i) => i.name).join(", ")} in ${file}`);
+  }
+
+  /**
+   * "Add server": what this machine already has (other clients' configs,
+   * installed *-mcp commands, built MCP SDK packages), then the manual way.
+   */
+  async add(runtimeNames: string[] = [], searchPaths: string[] = []) {
+    const configured = this.configured(runtimeNames);
+    let found: Discovered[] = [];
+    try {
+      found = discover(defaultOptions(homedir(), this.root(), searchPaths.map((p) => p.replace(/^~(?=\/|$)/, homedir())))).filter((d) => !configured.ids.has(identity(d.entry)));
+    } catch (err: any) {
+      this.log(`MCP discovery failed: ${err?.message ?? err}`);
+    }
+    type Item = vscode.QuickPickItem & { found?: Discovered; manual?: "local" | "remote" };
+    const items: Item[] = [];
+    if (found.length) {
+      items.push({ label: "Found on this system", kind: vscode.QuickPickItemKind.Separator });
+      for (const d of found)
+        items.push({
+          label: `$(plug) ${d.name}`,
+          description: summary(d.entry),
+          detail: [d.source, d.envKeys.length ? `uses ${d.envKeys.join(", ")}` : "", configured.names.has(d.name) ? "a server with this name exists" : ""].filter(Boolean).join(" · "),
+          found: d,
+        });
+      items.push({ label: "Enter it yourself", kind: vscode.QuickPickItemKind.Separator });
+    }
+    items.push(
+      { label: "$(terminal) Local command", detail: "A program OpenCode starts, e.g. npx -y @modelcontextprotocol/server-github", manual: "local" },
+      { label: "$(cloud) Remote URL", detail: "A Streamable HTTP or SSE endpoint, e.g. https://mcp.example.com/mcp", manual: "remote" },
     );
-    if (!kind) return;
+    const pick = await vscode.window.showQuickPick(items, {
+      title: "Add MCP server",
+      placeHolder: found.length ? `${found.length} found on this system, or enter one yourself` : COST_NOTE,
+      matchOnDescription: true,
+      matchOnDetail: true,
+    });
+    if (!pick) return;
+    if (pick.found) return this.addFound(pick.found, configured.names);
+    return this.addManual(pick.manual!);
+  }
+
+  /** Asks whether a new server starts now or waits until it is switched on. */
+  private async pickStart(): Promise<boolean | undefined> {
+    const pick = await vscode.window.showQuickPick(
+      [
+        { label: "$(play) Start it now", detail: "Its tools are available to the agents right away.", off: false },
+        { label: "$(circle-slash) Add it switched off", detail: 'Written with "disabled": true. Switch it on in the Tools panel when you need it.', off: true },
+      ],
+      { title: "When should it run?", placeHolder: COST_NOTE },
+    );
+    return pick?.off;
+  }
+
+  private async addFound(d: Discovered, taken: Set<string>) {
+    let suggested = d.name;
+    for (let n = 2; taken.has(suggested); n++) suggested = `${d.name}-${n}`;
+    const name = await vscode.window.showInputBox({
+      title: `Add ${d.name} (from ${d.source})`,
+      prompt: "Its tools are called <name>_<tool>",
+      value: suggested,
+      ignoreFocusOut: true,
+      validateInput: (v) => (!/^[A-Za-z0-9_-]+$/.test(v) ? "Letters, digits, - and _ only" : taken.has(v) ? "A server with this name is already configured" : undefined),
+    });
+    if (!name) return;
+    const scope = await this.pickScope();
+    if (!scope) return;
+    let entry: McpServerEntry = d.entry;
+    if (d.secrets) {
+      const keys = Object.keys(d.secrets);
+      const options: (vscode.QuickPickItem & { copy: boolean })[] = [
+        { label: `$(link) Refer to ${keys.join(", ")} in your environment`, detail: `Writes {env:${keys[0]}}; export the variable in your shell profile so OpenCode sees it. Nothing secret goes in the file.`, copy: false },
+      ];
+      // A project file may be committed: never copy secrets into it.
+      if (scope === "global") options.push({ label: `$(copy) Copy the value${keys.length > 1 ? "s" : ""} into ${this.configFile("global")}`, detail: `Plain text, as in ${d.source}'s own config.`, copy: true });
+      const how = await vscode.window.showQuickPick(options, { title: `${d.name} uses ${keys.join(", ")}` });
+      if (!how) return;
+      if (how.copy) entry = withSecrets(entry, d.secrets);
+    }
+    const off = await this.pickStart();
+    if (off === undefined) return;
+    const file = this.write(scope, [{ name, entry: off ? { ...entry, disabled: true } : entry }]);
+    void vscode.window
+      .showInformationMessage(`Added "${name}" to ${file}${off ? ", switched off" : ""}. Tellico picks it up in a few seconds.`, "Open File")
+      .then((p) => p && this.open(file));
+  }
+
+  private async addManual(kindValue: "local" | "remote") {
+    const kind = { value: kindValue };
     const target = await vscode.window.showInputBox({
       title: kind.value === "local" ? "Command line" : "Server URL",
       prompt: kind.value === "local" ? "Use {env:NAME} for secrets so they stay out of the file" : "OAuth sign-in, if the server needs it, starts from the MCP panel",
@@ -84,9 +209,11 @@ export class McpManager {
     if (!name) return;
     const scope = await this.pickScope();
     if (!scope) return;
+    const off = await this.pickStart();
+    if (off === undefined) return;
     const entry: McpServerEntry = kind.value === "local" ? { type: "local", command: splitCommand(target) } : { type: "remote", url: target.trim() };
-    const file = this.write(scope, [{ name, entry }]);
-    void vscode.window.showInformationMessage(`Added MCP server "${name}" to ${file}. Tellico picks it up in a few seconds.`, "Open File").then((p) => p && this.open(file));
+    const file = this.write(scope, [{ name, entry: off ? { ...entry, disabled: true } : entry }]);
+    void vscode.window.showInformationMessage(`Added MCP server "${name}" to ${file}${off ? ", switched off" : ""}. Tellico picks it up in a few seconds.`, "Open File").then((p) => p && this.open(file));
   }
 
   /** Copies servers from VS Code's own mcp.json files into OpenCode's config. */
@@ -163,4 +290,17 @@ export class McpManager {
   private async open(file: string) {
     await vscode.window.showTextDocument(vscode.Uri.file(file));
   }
+}
+
+/** One line for the picker: the command line or URL, with the home folder as ~. */
+function summary(e: McpServerEntry): string {
+  const text = e.type === "remote" ? e.url : e.command.join(" ");
+  const home = homedir();
+  return text.split(home + "/").join("~/");
+}
+
+/** The entry with its {env:NAME} references replaced by the literal values. */
+function withSecrets(e: McpServerEntry, secrets: Record<string, string>): McpServerEntry {
+  if (e.type === "local") return { ...e, environment: { ...(e.environment ?? {}), ...secrets } };
+  return { ...e, headers: { ...(e.headers ?? {}), ...secrets } };
 }

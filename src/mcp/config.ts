@@ -231,6 +231,76 @@ export function setDisabled(configText: string, name: string, disabled: boolean)
   return edit(configText, [...at, key], value, formatting(configText));
 }
 
+export interface ConfigIssue {
+  /** The server's name. */
+  name: string;
+  /** What OpenCode does with it, in plain words. */
+  problem: string;
+}
+
+/**
+ * Entries OpenCode 2 silently misreads, checked against 2.0.26: inside
+ * `mcp.servers` it ignores `enabled` (the server starts), `args` (the command
+ * runs without them) and `env` (the variables are missing), and drops an
+ * entry whose `command` is a string or whose `type` is not local/remote.
+ * Mostly the shape other clients use, pasted in.
+ */
+export function lintConfig(configText: string): ConfigIssue[] {
+  let servers: { name: string; entry: unknown; style: ConfigStyle }[];
+  try {
+    servers = listServers(configText);
+  } catch {
+    return [];
+  }
+  const issues: ConfigIssue[] = [];
+  for (const { name, entry, style } of servers) {
+    if (!isObject(entry)) continue;
+    const problems: string[] = [];
+    if (style === "v2" && "enabled" in entry)
+      problems.push(entry.enabled === false ? '"enabled": false is ignored here, so it starts anyway; OpenCode 2 uses "disabled": true' : '"enabled" is not an OpenCode 2 key');
+    if ("args" in entry) problems.push('"args" is ignored: the command runs without those arguments (they belong in the "command" array)');
+    if ("env" in entry) problems.push('"env" is ignored: OpenCode calls it "environment"');
+    if (typeof entry.command === "string") problems.push('"command" is a string, so OpenCode skips this server; it must be an array');
+    if (entry.type !== "local" && entry.type !== "remote") problems.push(`"type": ${JSON.stringify(entry.type)} is not "local" or "remote", so OpenCode skips this server`);
+    if (problems.length) issues.push({ name, problem: problems.join("; ") });
+  }
+  return issues;
+}
+
+/** The entry rewritten the way OpenCode reads it (see lintConfig). */
+export function fixEntry(entry: Record<string, unknown>, style: ConfigStyle): Record<string, unknown> {
+  const e: Record<string, unknown> = { ...entry };
+  const t = String(e.type ?? "").toLowerCase();
+  if (t !== "local" && t !== "remote") e.type = typeof e.url === "string" && !e.command ? "remote" : "local";
+  if (e.type === "local") {
+    const base = typeof e.command === "string" ? splitCommand(e.command) : Array.isArray(e.command) ? e.command.map(String) : [];
+    const args = Array.isArray(e.args) ? e.args.map(String) : [];
+    if (typeof e.command === "string" || args.length) e.command = [...base, ...args];
+  }
+  delete e.args;
+  if (isObject(e.env)) e.environment = { ...(isObject(e.environment) ? e.environment : {}), ...e.env };
+  delete e.env;
+  if (style === "v2" && "enabled" in e) {
+    if (e.enabled === false) e.disabled = true;
+    delete e.enabled;
+  }
+  // Keys in the order OpenCode documents them, so the result reads naturally.
+  const order = ["type", "command", "url", "cwd", "environment", "headers", "oauth", "disabled", "enabled"];
+  return Object.fromEntries([...order.filter((k) => k in e).map((k) => [k, e[k]] as const), ...Object.entries(e).filter(([k]) => !order.includes(k))]);
+}
+
+/** Applies fixEntry to every entry lintConfig flags (or only `name`). */
+export function fixConfig(configText: string, name?: string): string {
+  let text = configText;
+  for (const issue of lintConfig(configText)) {
+    if (name && issue.name !== name) continue;
+    const found = listServers(text).find((s) => s.name === issue.name);
+    if (!found || !isObject(found.entry)) continue;
+    text = edit(text, serverPath(text, issue.name)!, fixEntry(found.entry, found.style), formatting(text));
+  }
+  return text;
+}
+
 /**
  * modify() with formatting reflows every line the edit touches, so a one-line
  * sibling such as `"time": { "type": "local", ... },` would be expanded. Edit

@@ -96,11 +96,22 @@ const queued = (sid: string): ServerEvent[] => [
 
 const mcp: HostToWebview = {
   type: "mcp",
+  issues: [
+    {
+      file: "/home/me/.config/opencode/opencode.json",
+      scope: "global",
+      issues: [
+        { name: "bookfusion", problem: '"enabled": false is ignored here, so it starts anyway; OpenCode 2 uses "disabled": true' },
+        { name: "black-hat-tomes", problem: '"enabled": false is ignored here, so it starts anyway; OpenCode 2 uses "disabled": true' },
+      ],
+    },
+  ],
   servers: [
     { name: "vscode", status: "connected", canAuth: false, builtin: true },
     { name: "github", status: "needs_auth", error: "Authorization required", canAuth: true },
     { name: "postgres", status: "failed", error: "NotFound: ChildProcess.spawn (uvx mcp-server-postgres)", canAuth: false },
     { name: "docs", status: "connected", canAuth: false },
+    { name: "bookfusion", status: "connected", canAuth: false },
   ],
 };
 

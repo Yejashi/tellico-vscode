@@ -40,6 +40,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("tellico.stats", withChat((v) => c.showPanel(v, "stats"))),
     vscode.commands.registerCommand("tellico.mcp", withChat((v) => c.showPanel(v, "mcp"))),
     vscode.commands.registerCommand("tellico.mcpAdd", withChat((v) => c.handle(v, { type: "mcpAdd" }))),
+    vscode.commands.registerCommand("tellico.mcpFixConfig", withChat((v) => c.showPanel(v, "mcp"))),
     vscode.commands.registerCommand("tellico.mcpImport", withChat((v) => c.handle(v, { type: "mcpImport" }))),
     vscode.commands.registerCommand("tellico.compact", withChat((v) => c.handle(v, { type: "compact" }))),
     vscode.commands.registerCommand("tellico.stop", () => {

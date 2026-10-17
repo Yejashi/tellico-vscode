@@ -63,7 +63,7 @@ function App() {
   const ctx = stats?.context ?? s?.usage?.input;
   const limit = state.prefs?.contextLimit;
   const decode = busy ? stats?.decode.last : latestTurnRate(state.messages) ?? stats?.decode.last;
-  const mcpTrouble = state.mcp.some((m) => m.status === "failed" || m.status === "needs_auth");
+  const mcpTrouble = state.mcp.some((m) => m.status === "failed" || m.status === "needs_auth") || state.mcpIssues.length > 0;
   const waiting = (s?.permissions.length ?? 0) + (s?.forms.length ?? 0);
   const announcement = useAnnouncement(s?.status, waiting);
   const toggle = (p: PanelName) => setPanel(panel === p ? null : p);
@@ -112,7 +112,7 @@ function App() {
         )}
         {panel === "history" && <HistoryPanel sessions={state.sessions} currentId={s?.id} onClose={() => setPanel(null)} />}
         {panel === "stats" && s && stats && <StatsPanel stats={stats} session={s} prefs={state.prefs} commands={state.commands} onClose={() => setPanel(null)} />}
-        {panel === "mcp" && <ToolsPanel servers={state.mcp} saved={state.savedPermissions} onClose={() => setPanel(null)} />}
+        {panel === "mcp" && <ToolsPanel servers={state.mcp} issues={state.mcpIssues} saved={state.savedPermissions} onClose={() => setPanel(null)} />}
       </div>
       {toast && (
         <div className="event event-error floating" role="alert">

@@ -43,6 +43,13 @@ export interface McpServerView {
   builtin?: boolean;
 }
 
+/** Config entries OpenCode silently misreads, per file (see lintConfig). */
+export interface McpConfigIssues {
+  file: string;
+  scope: "project" | "global";
+  issues: { name: string; problem: string }[];
+}
+
 export interface SavedPermissionView {
   id: string;
   action: string;
@@ -93,7 +100,7 @@ export type HostToWebview =
   /** Replace the composer's text (edit-and-resend, a rewind). */
   | { type: "setComposer"; text: string }
   | { type: "fileMatches"; query: string; items: { path: string; type: "file" | "directory" }[] }
-  | { type: "mcp"; servers: McpServerView[] }
+  | { type: "mcp"; servers: McpServerView[]; issues?: McpConfigIssues[] }
   | { type: "savedPermissions"; items: SavedPermissionView[] }
   /** Open one of the webview's panels (view title buttons). */
   | { type: "showPanel"; panel: "history" | "stats" | "mcp" }
@@ -141,6 +148,8 @@ export type WebviewToHost =
   | { type: "mcpAdd" }
   | { type: "mcpImport" }
   | { type: "mcpOpenConfig" }
+  /** Rewrite the misread entries of one OpenCode config file. */
+  | { type: "mcpFixConfig"; file: string }
   | { type: "savedPermissions" }
   | { type: "removeSavedPermission"; id: string }
   | { type: "openSettings" };

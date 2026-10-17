@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **Add MCP server** offers the servers already on this machine: other
+  clients' configs (Claude Code/Desktop, Cursor, VS Code, Cline, Roo,
+  Windsurf, Gemini CLI, Codex, Crush, Zed), installed `*-mcp` commands, and
+  MCP SDK packages you built. Secrets from other configs stay `{env:NAME}`
+  references unless copied into the global config on request. A new server
+  can be added switched off.
+- **MCP config check**: the Tools panel flags entries OpenCode 2 silently
+  misreads (`enabled` under `mcp.servers`, `args`, `env`, a string
+  `command`, `"type": "stdio"`) and fixes them in one click.
+
 ## 0.3.0 -- 2026-10-16
 
 - **Checkpoints**: rewind the files and conversation to before any message
